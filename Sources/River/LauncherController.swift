@@ -13,27 +13,6 @@ private final class GlowView: NSVisualEffectView {
   }
 }
 
-private final class GlowingFieldEditor: NSTextView {
-  override init(frame frameRect: NSRect, textContainer container: NSTextContainer?) {
-    super.init(frame: frameRect, textContainer: container)
-    isFieldEditor = true
-    insertionPointColor = NSColor(calibratedRed: 0.31, green: 0.72, blue: 1, alpha: 1)
-  }
-
-  required init?(coder: NSCoder) { nil }
-
-  override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
-    NSGraphicsContext.current?.saveGraphicsState()
-    let glow = NSShadow()
-    glow.shadowColor = NSColor(calibratedRed: 0.16, green: 0.58, blue: 1, alpha: 0.95)
-    glow.shadowBlurRadius = 7
-    glow.shadowOffset = .zero
-    glow.set()
-    super.drawInsertionPoint(in: rect, color: insertionPointColor, turnedOn: flag)
-    NSGraphicsContext.current?.restoreGraphicsState()
-  }
-}
-
 private final class ResultCellView: NSTableCellView {
   let titleLabel = NSTextField(labelWithString: "")
   let subtitleLabel = NSTextField(labelWithString: "")
@@ -77,7 +56,6 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
   private let lucky = LuckyResolver()
   private let panel: LauncherPanel
   private let input = NSTextField()
-  private let fieldEditor = GlowingFieldEditor(frame: .zero, textContainer: nil)
   private let table = NSTableView()
   private let scrollView = NSScrollView()
   private var rows: [Row] = []
@@ -114,6 +92,14 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     NSApp.activate(ignoringOtherApps: true)
     panel.makeKeyAndOrderFront(nil)
     panel.makeFirstResponder(input)
+    if let editor = panel.fieldEditor(true, for: input) as? NSTextView {
+      editor.insertionPointColor = NSColor(
+        calibratedRed: 0.31, green: 0.72, blue: 1, alpha: 1)
+      editor.isEditable = true
+      editor.isSelectable = true
+      editor.isRichText = false
+      editor.drawsBackground = false
+    }
   }
 
   func dismiss() {
@@ -127,10 +113,6 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
 
   func windowDidResignKey(_ notification: Notification) {
     dismiss()
-  }
-
-  func windowWillReturnFieldEditor(_ sender: NSWindow, to client: Any?) -> Any? {
-    client as? NSTextField === input ? fieldEditor : nil
   }
 
   func controlTextDidChange(_ obj: Notification) {
@@ -212,6 +194,9 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     input.focusRingType = .none
     input.isBezeled = false
     input.drawsBackground = false
+    input.isEditable = true
+    input.isSelectable = true
+    input.isEnabled = true
     input.delegate = self
     input.translatesAutoresizingMaskIntoConstraints = false
 

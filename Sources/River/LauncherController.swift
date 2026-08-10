@@ -6,11 +6,21 @@ private final class LauncherPanel: NSPanel {
   override var canBecomeMain: Bool { false }
 }
 
-private final class GlowView: NSVisualEffectView {
+private final class GlowView: NSView {
   override func layout() {
     super.layout()
     layer?.shadowPath = CGPath(rect: bounds, transform: nil)
   }
+}
+
+private enum RiverLayout {
+  static let glowInset: CGFloat = 22
+  static let surfaceWidth: CGFloat = 760
+  static let barHeight: CGFloat = 76
+  static let rowHeight: CGFloat = 52
+
+  static var windowWidth: CGFloat { surfaceWidth + glowInset * 2 }
+  static var restingWindowHeight: CGFloat { barHeight + glowInset * 2 }
 }
 
 private final class ResultCellView: NSTableCellView {
@@ -19,9 +29,9 @@ private final class ResultCellView: NSTableCellView {
 
   override init(frame frameRect: NSRect) {
     super.init(frame: frameRect)
-    titleLabel.font = .systemFont(ofSize: 14, weight: .medium)
+    titleLabel.font = .systemFont(ofSize: 16, weight: .medium)
     titleLabel.lineBreakMode = .byTruncatingMiddle
-    subtitleLabel.font = .systemFont(ofSize: 11)
+    subtitleLabel.font = .systemFont(ofSize: 12)
     subtitleLabel.textColor = .secondaryLabelColor
     subtitleLabel.lineBreakMode = .byTruncatingMiddle
 
@@ -32,8 +42,8 @@ private final class ResultCellView: NSTableCellView {
     stack.translatesAutoresizingMaskIntoConstraints = false
     addSubview(stack)
     NSLayoutConstraint.activate([
-      stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-      stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+      stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 18),
+      stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -18),
       stack.centerYAnchor.constraint(equalTo: centerYAnchor),
     ])
   }
@@ -64,7 +74,12 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
   init(configStore: ConfigStore) {
     self.configStore = configStore
     panel = LauncherPanel(
-      contentRect: NSRect(x: 0, y: 0, width: 620, height: 52),
+      contentRect: NSRect(
+        x: 0,
+        y: 0,
+        width: RiverLayout.windowWidth,
+        height: RiverLayout.restingWindowHeight
+      ),
       styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
       backing: .buffered,
       defer: false
@@ -142,7 +157,9 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
 
   func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
 
-  func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat { 44 }
+  func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+    RiverLayout.rowHeight
+  }
 
   func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView?
   {
@@ -173,23 +190,44 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
   }
 
   private func configureContent() {
-    let visualEffect = GlowView()
-    visualEffect.material = .hudWindow
-    visualEffect.blendingMode = .behindWindow
-    visualEffect.state = .active
-    visualEffect.appearance = NSAppearance(named: .darkAqua)
-    visualEffect.wantsLayer = true
-    visualEffect.layer?.cornerRadius = 0
-    visualEffect.layer?.masksToBounds = false
-    visualEffect.layer?.borderWidth = 1
-    visualEffect.layer?.borderColor = NSColor.systemBlue.withAlphaComponent(0.62).cgColor
-    visualEffect.layer?.shadowColor = NSColor.systemBlue.cgColor
-    visualEffect.layer?.shadowOpacity = 0.42
-    visualEffect.layer?.shadowRadius = 12
-    visualEffect.layer?.shadowOffset = .zero
+    let root = NSView()
+    root.wantsLayer = true
+    root.layer?.backgroundColor = NSColor.clear.cgColor
+
+    let surface = GlowView()
+    surface.appearance = NSAppearance(named: .darkAqua)
+    surface.wantsLayer = true
+    surface.layer?.backgroundColor =
+      NSColor(
+        calibratedRed: 0.012,
+        green: 0.017,
+        blue: 0.028,
+        alpha: 0.80
+      ).cgColor
+    surface.layer?.cornerRadius = 0
+    surface.layer?.masksToBounds = false
+    surface.layer?.borderWidth = 2
+    surface.layer?.borderColor =
+      NSColor(
+        calibratedRed: 0.12,
+        green: 0.53,
+        blue: 1,
+        alpha: 0.96
+      ).cgColor
+    surface.layer?.shadowColor =
+      NSColor(
+        calibratedRed: 0.05,
+        green: 0.45,
+        blue: 1,
+        alpha: 1
+      ).cgColor
+    surface.layer?.shadowOpacity = 0.78
+    surface.layer?.shadowRadius = 18
+    surface.layer?.shadowOffset = .zero
+    surface.translatesAutoresizingMaskIntoConstraints = false
 
     input.placeholderString = nil
-    input.font = .systemFont(ofSize: 22, weight: .regular)
+    input.font = .systemFont(ofSize: 28, weight: .light)
     input.textColor = .white
     input.focusRingType = .none
     input.isBezeled = false
@@ -219,19 +257,31 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     scrollView.isHidden = true
     scrollView.translatesAutoresizingMaskIntoConstraints = false
 
-    visualEffect.addSubview(input)
-    visualEffect.addSubview(scrollView)
-    panel.contentView = visualEffect
+    surface.addSubview(input)
+    surface.addSubview(scrollView)
+    root.addSubview(surface)
+    panel.contentView = root
 
     NSLayoutConstraint.activate([
-      input.leadingAnchor.constraint(equalTo: visualEffect.leadingAnchor, constant: 16),
-      input.trailingAnchor.constraint(equalTo: visualEffect.trailingAnchor, constant: -16),
-      input.topAnchor.constraint(equalTo: visualEffect.topAnchor, constant: 7),
-      input.heightAnchor.constraint(equalToConstant: 38),
-      scrollView.leadingAnchor.constraint(equalTo: visualEffect.leadingAnchor, constant: 6),
-      scrollView.trailingAnchor.constraint(equalTo: visualEffect.trailingAnchor, constant: -6),
-      scrollView.topAnchor.constraint(equalTo: input.bottomAnchor, constant: 3),
-      scrollView.bottomAnchor.constraint(equalTo: visualEffect.bottomAnchor, constant: -4),
+      surface.leadingAnchor.constraint(
+        equalTo: root.leadingAnchor, constant: RiverLayout.glowInset),
+      surface.trailingAnchor.constraint(
+        equalTo: root.trailingAnchor,
+        constant: -RiverLayout.glowInset
+      ),
+      surface.topAnchor.constraint(equalTo: root.topAnchor, constant: RiverLayout.glowInset),
+      surface.bottomAnchor.constraint(
+        equalTo: root.bottomAnchor,
+        constant: -RiverLayout.glowInset
+      ),
+      input.leadingAnchor.constraint(equalTo: surface.leadingAnchor, constant: 30),
+      input.trailingAnchor.constraint(equalTo: surface.trailingAnchor, constant: -30),
+      input.topAnchor.constraint(equalTo: surface.topAnchor, constant: 20),
+      input.heightAnchor.constraint(equalToConstant: 44),
+      scrollView.leadingAnchor.constraint(equalTo: surface.leadingAnchor, constant: 12),
+      scrollView.trailingAnchor.constraint(equalTo: surface.trailingAnchor, constant: -12),
+      scrollView.topAnchor.constraint(equalTo: input.bottomAnchor, constant: 8),
+      scrollView.bottomAnchor.constraint(equalTo: surface.bottomAnchor, constant: -4),
     ])
   }
 
@@ -300,8 +350,9 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
 
   private func resize(for rowCount: Int) {
     let oldTop = panel.frame.maxY
-    let resultsHeight = CGFloat(rowCount) * 44
-    let height: CGFloat = rowCount == 0 ? 52 : min(52 + resultsHeight, 316)
+    let resultsHeight = CGFloat(rowCount) * RiverLayout.rowHeight
+    let surfaceHeight = min(RiverLayout.barHeight + resultsHeight, 336)
+    let height = surfaceHeight + RiverLayout.glowInset * 2
     var frame = panel.frame
     frame.size.height = height
     frame.origin.y = oldTop - height
@@ -315,7 +366,8 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     guard let visible = screen?.visibleFrame else { return }
     var frame = panel.frame
     frame.origin.x = visible.midX - frame.width / 2
-    frame.origin.y = visible.maxY - max(90, visible.height * 0.16)
+    let targetCenterY = visible.minY + visible.height * 0.62
+    frame.origin.y = targetCenterY - frame.height / 2
     panel.setFrame(frame, display: false)
   }
 

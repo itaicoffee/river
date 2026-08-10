@@ -30,10 +30,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 func printUsage() {
   print(
     """
-    usage: river [run|install|uninstall|config]
+    usage: river [run|install|restart|uninstall|config]
 
       run        run the launcher (default)
       install    install the binary, plugins, and login LaunchAgent
+      restart    restart the installed launcher
       uninstall  remove the binary and LaunchAgent; keep config/plugins
       config     print the live-reloaded config path
     """)
@@ -45,6 +46,11 @@ switch command {
 case "install":
   do { try Installer.install() } catch {
     fputs("river: install failed: \(error)\n", stderr)
+    exit(1)
+  }
+case "restart":
+  do { try Installer.restart() } catch {
+    fputs("river: restart failed: \(error.localizedDescription)\n", stderr)
     exit(1)
   }
 case "uninstall":

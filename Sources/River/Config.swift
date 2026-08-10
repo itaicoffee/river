@@ -1,5 +1,12 @@
 import Foundation
 
+struct Quicklink: Equatable {
+  let name: String
+  let destination: String
+
+  var requiresQuery: Bool { destination.contains("{query}") }
+}
+
 struct AppConfig: Equatable {
   var hotkey = "ctrl+f"
   var browser = "Google Chrome"
@@ -8,6 +15,7 @@ struct AppConfig: Equatable {
   var pluginDirectory = "~/.config/river/plugins"
   var pluginTimeoutMilliseconds = 5_000
   var maxFileResults = 5
+  var quicklinks: [Quicklink] = []
 
   static let defaultText = """
     # River reloads this file automatically. No restart is needed.
@@ -18,6 +26,8 @@ struct AppConfig: Equatable {
     plugin_dir = ~/.config/river/plugins
     plugin_timeout_ms = 5000
     max_file_results = 5
+    # quicklink.github = https://github.com/search?q={query}
+    # quicklink.project = ~/Documents/code/project
     """
 
   static func parse(_ text: String) -> AppConfig {
@@ -47,6 +57,21 @@ struct AppConfig: Equatable {
       case "max_file_results":
         if let count = Int(value), (1...10).contains(count) {
           config.maxFileResults = count
+        }
+      case let key where key.hasPrefix("quicklink."):
+        let name = String(key.dropFirst("quicklink.".count))
+          .trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty,
+          name.range(of: "^[A-Za-z0-9_-]+$", options: .regularExpression) != nil
+        else { continue }
+
+        let quicklink = Quicklink(name: name, destination: value)
+        if let index = config.quicklinks.firstIndex(where: {
+          $0.name.caseInsensitiveCompare(name) == .orderedSame
+        }) {
+          config.quicklinks[index] = quicklink
+        } else {
+          config.quicklinks.append(quicklink)
         }
       default: continue
       }
@@ -111,6 +136,12 @@ enum Paths {
   static var configFile: String {
     ProcessInfo.processInfo.environment["RIVER_CONFIG"]
       ?? expand("~/.config/river/config")
+  }
+
+  static var knowledgeFile: String {
+    ProcessInfo.processInfo.environment["RIVER_KNOWLEDGE"]
+      ?? URL(fileURLWithPath: configFile).deletingLastPathComponent()
+        .appendingPathComponent("knowledge.json").path
   }
 
   static var installedBinary: String {

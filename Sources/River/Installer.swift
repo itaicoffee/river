@@ -4,6 +4,23 @@ enum Installer {
   static let label = "dev.itai.river"
   private static let legacyLabel = "dev.itai.prompt"
 
+  private enum InstallerError: LocalizedError {
+    case notInstalled
+    case notRunning
+    case restartFailed(String)
+
+    var errorDescription: String? {
+      switch self {
+      case .notInstalled:
+        return "River is not installed; run 'river install' first"
+      case .notRunning:
+        return "the River LaunchAgent is not running"
+      case .restartFailed(let reason):
+        return reason
+      }
+    }
+  }
+
   static func install() throws {
     let fileManager = FileManager.default
     let sourceBinary = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL
@@ -43,6 +60,28 @@ enum Installer {
       try fileManager.removeItem(atPath: Paths.installedBinary)
     }
     print("Uninstalled River. Your config and plugins were kept at ~/.config/river.")
+  }
+
+  static func restart() throws {
+    guard FileManager.default.fileExists(atPath: Paths.launchAgent) else {
+      throw InstallerError.notInstalled
+    }
+    guard ProcessInfo.processInfo.environment["RIVER_SKIP_LAUNCHCTL"] != "1" else { return }
+
+    guard let pid = runningLaunchAgentPID() else { throw InstallerError.notRunning }
+    guard kill(pid, SIGTERM) == 0 else {
+      throw InstallerError.restartFailed(String(cString: strerror(errno)))
+    }
+    print("Restarted River")
+  }
+
+  static func runningPID(in launchctlOutput: String) -> pid_t? {
+    for line in launchctlOutput.split(whereSeparator: { $0.isNewline }) {
+      let trimmed = line.trimmingCharacters(in: .whitespaces)
+      guard trimmed.hasPrefix("pid = ") else { continue }
+      return pid_t(trimmed.dropFirst("pid = ".count))
+    }
+    return nil
   }
 
   private static func seedConfiguration() throws {
@@ -137,14 +176,41 @@ enum Installer {
     }
   }
 
-  private static func runLaunchctl(_ arguments: [String]) {
+  private static func runningLaunchAgentPID() -> pid_t? {
+    let process = Process()
+    let output = Pipe()
+    process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+    process.arguments = ["print", "gui/\(getuid())/\(label)"]
+    process.standardOutput = output
+    process.standardError = FileHandle.nullDevice
+    do {
+      try process.run()
+    } catch {
+      return nil
+    }
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else { return nil }
+    let data = output.fileHandleForReading.readDataToEndOfFile()
+    guard let text = String(data: data, encoding: .utf8) else { return nil }
+    return runningPID(in: text)
+  }
+
+  @discardableResult
+  private static func runLaunchctl(_ arguments: [String], suppressOutput: Bool = true) -> Int32 {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
     process.arguments = arguments
-    process.standardOutput = FileHandle.nullDevice
-    process.standardError = FileHandle.nullDevice
-    try? process.run()
+    if suppressOutput {
+      process.standardOutput = FileHandle.nullDevice
+      process.standardError = FileHandle.nullDevice
+    }
+    do {
+      try process.run()
+    } catch {
+      return -1
+    }
     process.waitUntilExit()
+    return process.terminationStatus
   }
 
   private static let defaultPlugins: [String: String] = [

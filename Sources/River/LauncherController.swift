@@ -288,6 +288,7 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
       case quicklink(QuicklinkRequest)
       case pluginSuggestion(String)
       case commandCenter(CommandCenterItem)
+      case stock(StockQuote)
     }
 
     let title: String
@@ -315,6 +316,7 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
   private let spotlight = SpotlightSearch()
   private let plugins = PluginRunner()
   private let lucky = LuckyResolver()
+  private let stocks = StockLookup()
   private let applicationCatalog = ApplicationCatalog()
   private let knowledge: ResultKnowledge
   private let panel: LauncherPanel
@@ -388,6 +390,7 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     spotlight.cancel()
     plugins.cancel()
     lucky.cancel()
+    stocks.cancel()
     stopLuckyPresentation()
     panel.orderOut(nil)
     input.stringValue = ""
@@ -625,6 +628,7 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     spotlight.cancel()
     plugins.cancel()
     lucky.cancel()
+    stocks.cancel()
     stopLuckyPresentation()
     let text = rawInput.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -735,6 +739,40 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
           action: "Open"
         )
       ])
+      return
+    }
+
+    if let request = StockRequest(input: text) {
+      setRows([
+        Row(
+          title: "Loading \(request.symbol)…",
+          subtitle: "Live market quote",
+          symbolName: "chart.line.uptrend.xyaxis"
+        )
+      ])
+      stocks.fetch(request) { [weak self] quote in
+        guard let self else { return }
+        if let quote {
+          self.setRows(
+            [
+              Row(
+                title: quote.title,
+                subtitle: quote.subtitle,
+                symbolName: "chart.line.uptrend.xyaxis",
+                action: "Open",
+                target: .stock(quote)
+              )
+            ], selectFirst: true)
+        } else {
+          self.setRows([
+            Row(
+              title: "Quote unavailable",
+              subtitle: "Check the ticker \(request.symbol) and try again",
+              symbolName: "exclamationmark.triangle"
+            )
+          ])
+        }
+      }
       return
     }
 
@@ -995,6 +1033,13 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
       return
     }
 
+    if let request = StockRequest(input: text) {
+      guard let url = StockLookup.quotePageURL(for: request.symbol) else { return }
+      Browser.open(url, application: configStore.value.browser)
+      dismiss()
+      return
+    }
+
     if let request = QuicklinkRequest(input: text, quicklinks: configStore.value.quicklinks) {
       guard let destination = request.resolvedDestination else { return }
       open(destination)
@@ -1234,6 +1279,12 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
         title: "Type a search",
         subtitle: "Open Google's first result",
         symbolName: "wand.and.stars"
+      )
+    case "stock":
+      return Row(
+        title: "Type a ticker",
+        subtitle: "Look up a live market quote",
+        symbolName: "chart.line.uptrend.xyaxis"
       )
     default:
       return nil

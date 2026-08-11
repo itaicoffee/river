@@ -119,6 +119,14 @@ enum CommandCenterCatalog {
         replacement: "lk ",
         submitsImmediately: false
       ),
+      CommandCenterItem(
+        title: "Stock Quote",
+        subtitle: "Input · Look up a ticker live",
+        symbolName: "chart.line.uptrend.xyaxis",
+        action: "Complete",
+        replacement: "stock ",
+        submitsImmediately: false
+      ),
     ]
 
     let quicklinkItems = quicklinks.map { quicklink in
@@ -216,6 +224,186 @@ struct ChatGPTRequest: Equatable {
     query = String(trimmed.dropFirst(prefix.count))
       .trimmingCharacters(in: .whitespacesAndNewlines)
     guard !query.isEmpty else { return nil }
+  }
+}
+
+struct StockRequest: Equatable {
+  let symbol: String
+
+  init(symbol: String) {
+    self.symbol = symbol.uppercased()
+  }
+
+  init?(input: String) {
+    let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+    let pieces = trimmed.split(whereSeparator: { $0.isWhitespace })
+    guard pieces.count == 2,
+      pieces[0].caseInsensitiveCompare("stock") == .orderedSame
+    else {
+      return nil
+    }
+
+    let symbol = String(pieces[1])
+    guard symbol.count <= 32,
+      symbol.range(of: "^[A-Za-z0-9.^=_-]+$", options: .regularExpression) != nil
+    else {
+      return nil
+    }
+    self.symbol = symbol.uppercased()
+  }
+}
+
+struct StockQuote: Equatable {
+  let symbol: String
+  let name: String
+  let exchange: String?
+  let currency: String?
+  let price: Decimal
+  let previousClose: Decimal?
+  let priceHint: Int
+
+  var title: String {
+    let priceText = Self.format(price, fractionDigits: priceHint)
+    let currentPrice = currency.map { "\(priceText) \($0)" } ?? priceText
+    guard let previousClose, previousClose != 0 else { return currentPrice }
+
+    let change = price - previousClose
+    let percentChange = change / previousClose * 100
+    let sign = change < 0 ? "−" : "+"
+    let absoluteChange = change < 0 ? -change : change
+    let absolutePercentChange = percentChange < 0 ? -percentChange : percentChange
+    return "\(currentPrice)  \(sign)\(Self.format(absoluteChange, fractionDigits: priceHint)) "
+      + "(\(sign)\(Self.format(absolutePercentChange, fractionDigits: 2))%)"
+  }
+
+  var subtitle: String {
+    [name, symbol, exchange].compactMap { value in
+      guard let value, !value.isEmpty else { return nil }
+      return value
+    }.joined(separator: " · ")
+  }
+
+  static func parse(_ data: Data) -> StockQuote? {
+    guard let meta = try? JSONDecoder().decode(ChartEnvelope.self, from: data)
+      .chart.result?.first?.meta,
+      let price = meta.regularMarketPrice
+    else {
+      return nil
+    }
+
+    return StockQuote(
+      symbol: meta.symbol,
+      name: meta.longName ?? meta.shortName ?? meta.symbol,
+      exchange: meta.fullExchangeName,
+      currency: meta.currency,
+      price: price,
+      previousClose: meta.previousClose ?? meta.chartPreviousClose,
+      priceHint: max(0, min(meta.priceHint ?? 2, 8))
+    )
+  }
+
+  private static func format(_ value: Decimal, fractionDigits: Int) -> String {
+    let formatter = NumberFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.numberStyle = .decimal
+    formatter.usesGroupingSeparator = true
+    formatter.minimumFractionDigits = fractionDigits
+    formatter.maximumFractionDigits = fractionDigits
+    formatter.roundingMode = .halfUp
+    return formatter.string(from: NSDecimalNumber(decimal: value))
+      ?? NSDecimalNumber(decimal: value).stringValue
+  }
+
+  private struct ChartEnvelope: Decodable {
+    let chart: Chart
+
+    struct Chart: Decodable {
+      let result: [Result]?
+    }
+
+    struct Result: Decodable {
+      let meta: Meta
+    }
+
+    struct Meta: Decodable {
+      let currency: String?
+      let symbol: String
+      let fullExchangeName: String?
+      let regularMarketPrice: Decimal?
+      let longName: String?
+      let shortName: String?
+      let chartPreviousClose: Decimal?
+      let previousClose: Decimal?
+      let priceHint: Int?
+    }
+  }
+}
+
+final class StockLookup {
+  private let session: URLSession
+  private var generation = 0
+  private var pendingWorkItem: DispatchWorkItem?
+  private var activeTask: URLSessionDataTask?
+
+  init(session: URLSession = .shared) {
+    self.session = session
+  }
+
+  func fetch(_ request: StockRequest, completion: @escaping (StockQuote?) -> Void) {
+    cancel()
+    let requestedGeneration = generation
+    let workItem = DispatchWorkItem { [weak self] in
+      guard let self, requestedGeneration == self.generation,
+        let url = Self.quoteURL(for: request.symbol)
+      else {
+        return
+      }
+
+      var urlRequest = URLRequest(url: url)
+      urlRequest.timeoutInterval = 6
+      urlRequest.setValue("River/1.0", forHTTPHeaderField: "User-Agent")
+      let task = self.session.dataTask(with: urlRequest) { [weak self] data, response, error in
+        DispatchQueue.main.async {
+          guard let self, requestedGeneration == self.generation else { return }
+          self.activeTask = nil
+          let status = (response as? HTTPURLResponse)?.statusCode
+          let quote = error == nil && status == 200 ? data.flatMap(StockQuote.parse) : nil
+          completion(quote)
+        }
+      }
+      self.activeTask = task
+      task.resume()
+    }
+    pendingWorkItem = workItem
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: workItem)
+  }
+
+  func cancel() {
+    generation += 1
+    pendingWorkItem?.cancel()
+    pendingWorkItem = nil
+    activeTask?.cancel()
+    activeTask = nil
+  }
+
+  static func quoteURL(for symbol: String) -> URL? {
+    let pathCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
+    guard let encodedSymbol = symbol.addingPercentEncoding(withAllowedCharacters: pathCharacters)
+    else {
+      return nil
+    }
+    return URL(
+      string: "https://query2.finance.yahoo.com/v8/finance/chart/\(encodedSymbol)"
+        + "?range=1d&interval=1m")
+  }
+
+  static func quotePageURL(for symbol: String) -> URL? {
+    let pathCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
+    guard let encodedSymbol = symbol.addingPercentEncoding(withAllowedCharacters: pathCharacters)
+    else {
+      return nil
+    }
+    return URL(string: "https://finance.yahoo.com/quote/\(encodedSymbol)")
   }
 }
 

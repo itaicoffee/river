@@ -165,6 +165,39 @@ final class RiverTests: XCTestCase {
     )
   }
 
+  func testStockRequestParsing() {
+    XCTAssertEqual(StockRequest(input: "stock aapl"), StockRequest(symbol: "AAPL"))
+    XCTAssertEqual(StockRequest(input: " STOCK   brk-b "), StockRequest(symbol: "BRK-B"))
+    XCTAssertEqual(StockRequest(input: "stock ^gspc"), StockRequest(symbol: "^GSPC"))
+    XCTAssertNil(StockRequest(input: "stock"))
+    XCTAssertNil(StockRequest(input: "stock apple inc"))
+    XCTAssertNil(StockRequest(input: "stock ../AAPL"))
+  }
+
+  func testStockQuoteParsingAndFormatting() {
+    let data = Data(
+      """
+      {"chart":{"result":[{"meta":{"currency":"USD","symbol":"AAPL",
+      "fullExchangeName":"NasdaqGS","regularMarketPrice":306.605,
+      "longName":"Apple Inc.","previousClose":308.26,"priceHint":2}}],"error":null}}
+      """.utf8)
+
+    let quote = StockQuote.parse(data)
+    XCTAssertEqual(quote?.title, "306.61 USD  −1.66 (−0.54%)")
+    XCTAssertEqual(quote?.subtitle, "Apple Inc. · AAPL · NasdaqGS")
+  }
+
+  func testStockURLsEncodeTickerPathComponents() {
+    XCTAssertEqual(
+      StockLookup.quoteURL(for: "^GSPC")?.absoluteString,
+      "https://query2.finance.yahoo.com/v8/finance/chart/%5EGSPC?range=1d&interval=1m"
+    )
+    XCTAssertEqual(
+      StockLookup.quotePageURL(for: "BRK-B")?.absoluteString,
+      "https://finance.yahoo.com/quote/BRK-B"
+    )
+  }
+
   func testChatGPTSubmissionPassesBrowserNameSeparatelyFromAppleScript() {
     let browser = "Browser's Custom Name"
     let arguments = Browser.chatGPTSubmitArguments(application: browser)
@@ -193,6 +226,7 @@ final class RiverTests: XCTestCase {
 
     XCTAssertTrue(items.contains(where: { $0.replacement == "river settings" }))
     XCTAssertTrue(items.contains(where: { $0.replacement == "ai " }))
+    XCTAssertTrue(items.contains(where: { $0.replacement == "stock " }))
     XCTAssertEqual(
       items.first(where: { $0.title == "github" }),
       CommandCenterItem(

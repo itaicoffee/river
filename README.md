@@ -44,6 +44,7 @@ To update, run the one-line installer again. Your configuration and plugins are 
 | Quicklink name + query | Opens a configured URL or local path |
 | `ai anything` | Opens the query in ChatGPT Chat |
 | `work anything` | Opens the query in ChatGPT Work |
+| `stock AAPL` | Shows a live market quote as you type; Return opens it |
 | `lk anything` | Opens Google's “I'm Feeling Lucky” destination |
 | Anything else | Searches with the configured browser and search engine |
 | `>` or `> settings` | Browses or filters the command center |
@@ -148,9 +149,9 @@ stay under `~/.config/river`; the ranking database is written with user-only per
 launching, file search, calculations, unit conversions, and power status are local.
 
 Network requests happen only when an action needs them: web and Lucky searches go to the configured
-search engine, `ai` and `work` open ChatGPT, definitions use macOS Dictionary services, and the
-bundled weather/UV plugins call `wttr.in`. Plugins are programs on your machine and run with your
-user permissions, so only install plugins you trust.
+search engine, `ai` and `work` open ChatGPT, stock quotes come from Yahoo Finance, definitions use
+macOS Dictionary services, and the bundled weather/UV plugins call `wttr.in`. Plugins are programs
+on your machine and run with your user permissions, so only install plugins you trust.
 
 The one-line installer is provided for convenience. It builds the public source locally and does
 not elevate privileges. If piping a script into a shell is not your style, use the inspectable Git

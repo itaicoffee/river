@@ -287,6 +287,7 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
       case calculation(CalculationResult)
       case quicklink(QuicklinkRequest)
       case pluginSuggestion(String)
+      case commandCenter(CommandCenterItem)
     }
 
     let title: String
@@ -322,8 +323,11 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
   private let table = NSTableView()
   private let scrollView = NSScrollView()
   private let divider = NSView()
+  private let fileIconCache = NSCache<NSString, NSImage>()
   private var resultsVerticalConstraints: [NSLayoutConstraint] = []
   private var rows: [Row] = []
+  private var cachedPluginDirectory: String?
+  private var cachedPluginNames: [String]?
   private var selectedIndex = 0
   private var selectionWasExplicit = false
   private var updatingSelection = false
@@ -344,6 +348,7 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
       defer: false
     )
     super.init()
+    fileIconCache.countLimit = 100
     configureWindow()
     configureContent()
   }
@@ -358,6 +363,8 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     stopLuckyPresentation()
     rows = []
     selectedIndex = 0
+    cachedPluginDirectory = nil
+    cachedPluginNames = nil
     input.stringValue = ""
     setResultsVisible(false)
     table.reloadData()
@@ -466,16 +473,23 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
   private func icon(for row: Row) -> NSImage? {
     switch row.target {
     case .application(let application):
-      let icon = NSWorkspace.shared.icon(forFile: application.url.path)
-      icon.size = NSSize(width: 30, height: 30)
-      return icon
+      return fileIcon(at: application.url.path, size: NSSize(width: 30, height: 30))
     case .file(let file):
-      let icon = NSWorkspace.shared.icon(forFile: file.path)
-      icon.size = NSSize(width: 28, height: 28)
-      return icon
+      return fileIcon(at: file.path, size: NSSize(width: 28, height: 28))
     default:
       return NSImage(systemSymbolName: row.symbolName, accessibilityDescription: nil)
     }
+  }
+
+  private func fileIcon(at path: String, size: NSSize) -> NSImage {
+    let key = "\(Int(size.width)):\(path)" as NSString
+    if let icon = fileIconCache.object(forKey: key) { return icon }
+
+    let workspaceIcon = NSWorkspace.shared.icon(forFile: path)
+    let icon = (workspaceIcon.copy() as? NSImage) ?? workspaceIcon
+    icon.size = size
+    fileIconCache.setObject(icon, forKey: key)
+    return icon
   }
 
   func tableViewSelectionDidChange(_ notification: Notification) {
@@ -619,6 +633,16 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
       return
     }
 
+    if text.hasPrefix(">") {
+      refreshCommandCenter(text)
+      return
+    }
+
+    if let prompt = incompleteInputPrompt(for: rawInput) {
+      setRows([prompt])
+      return
+    }
+
     if let command = RiverCommand(input: text) {
       switch command {
       case .restart:
@@ -733,8 +757,8 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
       return
     }
 
-    if applicationCatalog.exactMatch(named: text) == nil,
-      let calculation = Calculator.calculate(text)
+    let exactApplication = applicationCatalog.exactMatch(named: text)
+    if exactApplication == nil, let calculation = Calculator.calculate(text)
     {
       setRows(
         [
@@ -775,12 +799,41 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     } ?? false
     setRows(
       appRows,
-      selectFirst: applicationCatalog.exactMatch(named: text) != nil || firstIsLearned
+      selectFirst: exactApplication != nil || firstIsLearned
+    )
+  }
+
+  private func refreshCommandCenter(_ text: String) {
+    let query = String(text.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines)
+    let items = CommandCenterCatalog.items(
+      query: query,
+      quicklinks: configStore.value.quicklinks,
+      pluginNames: availablePluginNames()
+    )
+    let commandRows = items.map { item in
+      Row(
+        title: item.title,
+        subtitle: item.subtitle,
+        symbolName: item.symbolName,
+        action: item.action,
+        target: .commandCenter(item)
+      )
+    }
+    setRows(
+      commandRows.isEmpty
+        ? [
+          Row(
+            title: "No commands matching \(query)",
+            subtitle: "Try a River action, input mode, Quicklink, or plugin",
+            symbolName: "command"
+          )
+        ] : commandRows,
+      selectFirst: !commandRows.isEmpty
     )
   }
 
   private func refreshPluginCommand(_ text: String) {
-    let names = plugins.availablePlugins(in: configStore.value.pluginDirectory)
+    let names = availablePluginNames()
     let body = String(text.dropFirst())
     let commandName =
       body.split(
@@ -803,8 +856,10 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
       return
     }
 
-    let matches = plugins.matchingPlugins(
-      prefix: commandName, in: configStore.value.pluginDirectory)
+    let normalizedPrefix = commandName.lowercased()
+    let matches = names.filter {
+      normalizedPrefix.isEmpty || $0.lowercased().hasPrefix(normalizedPrefix)
+    }
     let suggestions = matches.map {
       Row(
         title: "/\($0)",
@@ -820,6 +875,18 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
         : suggestions,
       selectFirst: !suggestions.isEmpty
     )
+  }
+
+  private func availablePluginNames() -> [String] {
+    let directory = configStore.value.pluginDirectory
+    if cachedPluginDirectory == directory, let cachedPluginNames {
+      return cachedPluginNames
+    }
+
+    let names = plugins.availablePlugins(in: directory)
+    cachedPluginDirectory = directory
+    cachedPluginNames = names
+    return names
   }
 
   private func setRows(_ newRows: [Row], selectFirst: Bool = false) {
@@ -894,8 +961,19 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
   }
 
   private func submit() {
-    let text = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    let rawInput = input.stringValue
+    let text = rawInput.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !text.isEmpty else { return }
+
+    if text.hasPrefix(">") {
+      guard rows.indices.contains(selectedIndex),
+        case .commandCenter(let item)? = rows[selectedIndex].target
+      else { return }
+      activateCommandCenterItem(item)
+      return
+    }
+
+    if incompleteInputPrompt(for: rawInput) != nil { return }
 
     if let command = RiverCommand(input: text) {
       perform(command)
@@ -1033,7 +1111,16 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
   }
 
   private func completePluginCommand(_ name: String) {
-    input.stringValue = "/\(name)"
+    replaceInput(with: "/\(name)")
+  }
+
+  private func activateCommandCenterItem(_ item: CommandCenterItem) {
+    replaceInput(with: item.replacement)
+    if item.submitsImmediately { submit() }
+  }
+
+  private func replaceInput(with value: String) {
+    input.stringValue = value
     if let editor = panel.fieldEditor(true, for: input) as? NSTextView {
       editor.string = input.stringValue
       editor.setSelectedRange(NSRange(location: editor.string.utf16.count, length: 0))
@@ -1109,5 +1196,40 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     guard text.lowercased().hasPrefix(prefix) else { return nil }
     let word = String(text.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
     return word.isEmpty ? nil : word
+  }
+
+  private func incompleteInputPrompt(for rawInput: String) -> Row? {
+    let normalized = rawInput.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    let hasTrailingWhitespace = rawInput.last?.isWhitespace == true
+    guard hasTrailingWhitespace else { return nil }
+
+    switch normalized {
+    case "ai":
+      return Row(
+        title: "Type a question",
+        subtitle: "ChatGPT Chat · GPT-5.6 Sol",
+        symbolName: "sparkles"
+      )
+    case "work":
+      return Row(
+        title: "Describe the work",
+        subtitle: "ChatGPT Work · GPT-5.6 Sol",
+        symbolName: "briefcase"
+      )
+    case "define":
+      return Row(
+        title: "Type a word",
+        subtitle: "Look up a Dictionary definition",
+        symbolName: "character.book.closed"
+      )
+    case "lk":
+      return Row(
+        title: "Type a search",
+        subtitle: "Open Google's first result",
+        symbolName: "wand.and.stars"
+      )
+    default:
+      return nil
+    }
   }
 }

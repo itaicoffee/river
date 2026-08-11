@@ -30,6 +30,143 @@ enum RiverCommand: Equatable {
   }
 }
 
+struct CommandCenterItem: Equatable {
+  let title: String
+  let subtitle: String
+  let symbolName: String
+  let action: String
+  let replacement: String
+  let submitsImmediately: Bool
+}
+
+enum CommandCenterCatalog {
+  static func items(
+    query: String,
+    quicklinks: [Quicklink],
+    pluginNames: [String]
+  ) -> [CommandCenterItem] {
+    let builtIns = [
+      CommandCenterItem(
+        title: "River Settings",
+        subtitle: "River · Edit the live configuration",
+        symbolName: "slider.horizontal.3",
+        action: "Open",
+        replacement: "river settings",
+        submitsImmediately: true
+      ),
+      CommandCenterItem(
+        title: "Restart River",
+        subtitle: "River · Reload the launcher and configuration",
+        symbolName: "arrow.clockwise",
+        action: "Restart",
+        replacement: "river restart",
+        submitsImmediately: true
+      ),
+      CommandCenterItem(
+        title: "Ask ChatGPT",
+        subtitle: "Input · Start a ChatGPT query",
+        symbolName: "sparkles",
+        action: "Complete",
+        replacement: "ai ",
+        submitsImmediately: false
+      ),
+      CommandCenterItem(
+        title: "Work in ChatGPT",
+        subtitle: "Input · Start a ChatGPT Work query",
+        symbolName: "briefcase",
+        action: "Complete",
+        replacement: "work ",
+        submitsImmediately: false
+      ),
+      CommandCenterItem(
+        title: "Search Files",
+        subtitle: "Input · Find files with Spotlight",
+        symbolName: "doc.text.magnifyingglass",
+        action: "Complete",
+        replacement: "'",
+        submitsImmediately: false
+      ),
+      CommandCenterItem(
+        title: "Define a Word",
+        subtitle: "Input · Look up a Dictionary definition",
+        symbolName: "character.book.closed",
+        action: "Complete",
+        replacement: "define ",
+        submitsImmediately: false
+      ),
+      CommandCenterItem(
+        title: "I'm Feeling Lucky",
+        subtitle: "Input · Open Google's first result",
+        symbolName: "wand.and.stars",
+        action: "Complete",
+        replacement: "lk ",
+        submitsImmediately: false
+      ),
+    ]
+
+    let quicklinkItems = quicklinks.map { quicklink in
+      CommandCenterItem(
+        title: quicklink.name,
+        subtitle: "Quicklink · \(quicklink.destination)",
+        symbolName: quicklink.requiresQuery ? "link" : "arrow.up.right.square",
+        action: quicklink.requiresQuery ? "Complete" : "Open",
+        replacement: quicklink.name + (quicklink.requiresQuery ? " " : ""),
+        submitsImmediately: !quicklink.requiresQuery
+      )
+    }
+    let pluginItems = pluginNames.map { name in
+      CommandCenterItem(
+        title: "/\(name)",
+        subtitle: "Plugin · Executable command",
+        symbolName: "terminal",
+        action: "Run",
+        replacement: "/\(name)",
+        submitsImmediately: false
+      )
+    }
+    let catalog = builtIns + quicklinkItems + pluginItems
+    let normalizedQuery = normalize(query)
+    guard !normalizedQuery.isEmpty else { return catalog }
+
+    return
+      catalog.enumerated().compactMap { index, item -> (CommandCenterItem, Int, Int)? in
+        guard let score = matchScore(item, query: normalizedQuery) else { return nil }
+        return (item, score, index)
+      }.sorted { left, right in
+        left.1 == right.1 ? left.2 < right.2 : left.1 > right.1
+      }.map(\.0)
+  }
+
+  private static func matchScore(_ item: CommandCenterItem, query: String) -> Int? {
+    let title = normalize(item.title)
+    let replacement = normalize(item.replacement)
+    let searchable = normalize("\(item.title) \(item.subtitle) \(item.replacement)")
+
+    if title == query || replacement == query { return 1_000 }
+    if title.hasPrefix(query) || replacement.hasPrefix(query) { return 900 }
+    if title.split(separator: " ").contains(where: { $0.hasPrefix(query) }) { return 800 }
+    if title.contains(query) { return 700 }
+    let terms = query.split(whereSeparator: { $0.isWhitespace })
+    if terms.allSatisfy({ searchable.contains($0) }) { return 600 }
+    if isSubsequence(query, of: title) { return 500 }
+    return nil
+  }
+
+  private static func normalize(_ value: String) -> String {
+    value.trimmingCharacters(in: .whitespacesAndNewlines)
+      .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+      .lowercased()
+  }
+
+  private static func isSubsequence(_ query: String, of candidate: String) -> Bool {
+    var remaining = query[...]
+    for character in candidate where !remaining.isEmpty {
+      if character == remaining.first { remaining.removeFirst() }
+    }
+    return remaining.isEmpty
+  }
+}
+
 struct ChatGPTRequest: Equatable {
   enum Surface: Equatable {
     case chat
@@ -141,7 +278,12 @@ struct ApplicationResult: Equatable {
 }
 
 final class ApplicationCatalog {
-  private let applications: [ApplicationResult]
+  private struct IndexedApplication {
+    let result: ApplicationResult
+    let normalizedName: String
+  }
+
+  private let applications: [IndexedApplication]
 
   init(applicationURLs: [URL]? = nil) {
     let urls = applicationURLs ?? Self.discoverApplicationURLs()
@@ -152,16 +294,16 @@ final class ApplicationCatalog {
         seenPaths.insert(standardized.path).inserted
       else { return nil }
 
-      return ApplicationResult(
-        name: standardized.deletingPathExtension().lastPathComponent,
-        url: standardized
+      let result = ApplicationResult(
+        name: standardized.deletingPathExtension().lastPathComponent, url: standardized
       )
+      return IndexedApplication(result: result, normalizedName: Self.normalized(result.name))
     }
   }
 
   func exactMatch(named query: String) -> ApplicationResult? {
     let normalizedQuery = Self.normalized(query)
-    return applications.first { Self.normalized($0.name) == normalizedQuery }
+    return applications.first { $0.normalizedName == normalizedQuery }?.result
   }
 
   func matches(
@@ -174,11 +316,11 @@ final class ApplicationCatalog {
 
     return
       applications
-      .compactMap { application -> (ApplicationResult, Int)? in
+      .compactMap { application -> (IndexedApplication, Int)? in
         guard
           let score = Self.fuzzyScore(
             query: normalizedQuery,
-            candidate: Self.normalized(application.name)
+            candidate: application.normalizedName
           )
         else { return nil }
         return (application, score)
@@ -188,8 +330,8 @@ final class ApplicationCatalog {
         let rightIsExact = $1.1 == 10_000
         if leftIsExact != rightIsExact { return leftIsExact }
 
-        let leftPreferred = preferredOrder[$0.0.knowledgeIdentifier]
-        let rightPreferred = preferredOrder[$1.0.knowledgeIdentifier]
+        let leftPreferred = preferredOrder[$0.0.result.knowledgeIdentifier]
+        let rightPreferred = preferredOrder[$1.0.result.knowledgeIdentifier]
         switch (leftPreferred, rightPreferred) {
         case let (left?, right?) where left != right: return left < right
         case (_?, nil): return true
@@ -198,10 +340,11 @@ final class ApplicationCatalog {
         }
 
         if $0.1 != $1.1 { return $0.1 > $1.1 }
-        return $0.0.name.localizedCaseInsensitiveCompare($1.0.name) == .orderedAscending
+        return $0.0.result.name.localizedCaseInsensitiveCompare($1.0.result.name)
+          == .orderedAscending
       }
       .prefix(limit)
-      .map(\.0)
+      .map(\.0.result)
   }
 
   static func fuzzyScore(query: String, candidate: String) -> Int? {
@@ -268,11 +411,12 @@ final class ApplicationCatalog {
 
 final class SpotlightSearch {
   private let queue = DispatchQueue(label: "river.spotlight", qos: .userInitiated)
+  private let stateLock = NSLock()
   private var generation = 0
+  private var activeProcesses: [Process] = []
 
   func search(_ query: String, limit: Int, completion: @escaping ([FileResult]) -> Void) {
-    generation += 1
-    let requestedGeneration = generation
+    let requestedGeneration = beginRequest()
     let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else {
       completion([])
@@ -280,7 +424,7 @@ final class SpotlightSearch {
     }
 
     queue.asyncAfter(deadline: .now() + 0.08) { [weak self] in
-      guard let self, requestedGeneration == self.generation else { return }
+      guard let self, self.isCurrent(requestedGeneration) else { return }
 
       let spotlight = Process()
       spotlight.executableURL = URL(fileURLWithPath: "/usr/bin/mdfind")
@@ -301,10 +445,18 @@ final class SpotlightSearch {
       do {
         try spotlight.run()
         try head.run()
+        guard self.register([spotlight, head], for: requestedGeneration) else {
+          Self.terminate([spotlight, head])
+          return
+        }
+
+        // Drain while `head` is running. Waiting first can fill the pipe buffer and
+        // deadlock on searches that return many long paths.
+        let data = output.fileHandleForReading.readDataToEndOfFile()
         head.waitUntilExit()
         if spotlight.isRunning { spotlight.terminate() }
+        self.clearProcesses(for: requestedGeneration)
 
-        let data = output.fileHandleForReading.readDataToEndOfFile()
         let paths =
           String(data: data, encoding: .utf8)?
           .split(whereSeparator: { $0.isNewline })
@@ -312,17 +464,60 @@ final class SpotlightSearch {
         let results = paths.map(FileResult.init(path:))
 
         DispatchQueue.main.async { [weak self] in
-          guard let self, requestedGeneration == self.generation else { return }
+          guard let self, self.isCurrent(requestedGeneration) else { return }
           completion(results)
         }
       } catch {
-        DispatchQueue.main.async { completion([]) }
+        Self.terminate([spotlight, head])
+        self.clearProcesses(for: requestedGeneration)
+        DispatchQueue.main.async { [weak self] in
+          guard let self, self.isCurrent(requestedGeneration) else { return }
+          completion([])
+        }
       }
     }
   }
 
   func cancel() {
+    _ = beginRequest()
+  }
+
+  private func beginRequest() -> Int {
+    stateLock.lock()
     generation += 1
+    let requestedGeneration = generation
+    let processes = activeProcesses
+    activeProcesses = []
+    stateLock.unlock()
+    Self.terminate(processes)
+    return requestedGeneration
+  }
+
+  private func isCurrent(_ requestedGeneration: Int) -> Bool {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    return requestedGeneration == generation
+  }
+
+  private func register(_ processes: [Process], for requestedGeneration: Int) -> Bool {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    guard requestedGeneration == generation else { return false }
+    activeProcesses = processes
+    return true
+  }
+
+  private func clearProcesses(for requestedGeneration: Int) {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    guard requestedGeneration == generation else { return }
+    activeProcesses = []
+  }
+
+  private static func terminate(_ processes: [Process]) {
+    for process in processes where process.isRunning {
+      process.terminate()
+    }
   }
 
   static func filenamePredicate(for query: String) -> String {

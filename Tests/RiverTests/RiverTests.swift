@@ -181,6 +181,49 @@ final class RiverTests: XCTestCase {
     XCTAssertNil(RiverCommand(input: "river restart now"))
   }
 
+  func testCommandCenterIncludesBuiltInsQuicklinksAndPlugins() {
+    let items = CommandCenterCatalog.items(
+      query: "",
+      quicklinks: [
+        Quicklink(name: "github", destination: "https://github.com/search?q={query}"),
+        Quicklink(name: "project", destination: "~/Documents/code/prompt"),
+      ],
+      pluginNames: ["weather"]
+    )
+
+    XCTAssertTrue(items.contains(where: { $0.replacement == "river settings" }))
+    XCTAssertTrue(items.contains(where: { $0.replacement == "ai " }))
+    XCTAssertEqual(
+      items.first(where: { $0.title == "github" }),
+      CommandCenterItem(
+        title: "github",
+        subtitle: "Quicklink · https://github.com/search?q={query}",
+        symbolName: "link",
+        action: "Complete",
+        replacement: "github ",
+        submitsImmediately: false
+      )
+    )
+    XCTAssertEqual(items.first(where: { $0.title == "project" })?.submitsImmediately, true)
+    XCTAssertEqual(items.first(where: { $0.title == "/weather" })?.replacement, "/weather")
+  }
+
+  func testCommandCenterFiltersAndRanksMatches() {
+    let items = CommandCenterCatalog.items(
+      query: "sett",
+      quicklinks: [Quicklink(name: "github", destination: "https://github.com")],
+      pluginNames: ["weather"]
+    )
+    XCTAssertEqual(items.map(\.title), ["River Settings"])
+
+    let pluginItems = CommandCenterCatalog.items(
+      query: "weather",
+      quicklinks: [],
+      pluginNames: ["uv", "weather"]
+    )
+    XCTAssertEqual(pluginItems.first?.title, "/weather")
+  }
+
   func testTerminalEditorPassesConfigPathSeparatelyFromScript() {
     let path = "/tmp/River's settings/config file"
     let arguments = TerminalEditor.appleScriptArguments(path: path)
@@ -357,7 +400,9 @@ final class RiverTests: XCTestCase {
       XCTAssertEqual(output, "hello friend")
       finished.fulfill()
     }
-    wait(for: [finished], timeout: 2)
+    // Process startup can be delayed by macOS executable scanning on a busy machine.
+    // Keep the XCTest allowance beyond River's own five-second plugin timeout.
+    wait(for: [finished], timeout: 7)
   }
 
   func testGoogleLuckyRedirectIsUnwrapped() {

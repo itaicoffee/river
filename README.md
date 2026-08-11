@@ -46,6 +46,7 @@ To update, run the one-line installer again. Your configuration and plugins are 
 | `work anything` | Opens the query in ChatGPT Work |
 | `lk anything` | Opens Google's “I'm Feeling Lucky” destination |
 | Anything else | Searches with the configured browser and search engine |
+| `>` or `> settings` | Browses or filters the command center |
 | `/` or `/we` | Lists all plugins or filters them by name |
 | `/weather`, `/uv`, `/watts` | Runs one of River's bundled example plugins |
 | `river settings` | Opens the live config in Terminal with `nvim` |
@@ -103,6 +104,13 @@ quicklink.project = ~/Documents/code/project
 `github swift appkit` opens the first URL with the query safely encoded. `project` opens the local
 folder. Names can contain letters, digits, `_`, and `-`. A destination containing `{query}` requires
 a query; other destinations open directly.
+
+### Command center
+
+Type `>` to browse River actions, input modes, configured Quicklinks, and installed plugins. Keep
+typing to filter the list, then choose an item with the arrow keys and Return. Immediate actions
+such as settings open directly; Ask ChatGPT, Search Files, and query-based Quicklinks complete the
+appropriate prefix so you can type their argument.
 
 ### Calculator
 

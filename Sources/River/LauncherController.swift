@@ -689,11 +689,18 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
       let candidateLimit = max(50, resultLimit * 10)
       spotlight.search(query, limit: candidateLimit) { [weak self] results in
         guard let self else { return }
-        let ordered = self.knowledge.ordered(
+        let learnedOrder = self.knowledge.ordered(
           results, for: query, itemIdentifier: \.knowledgeIdentifier)
+        let ordered = FileResult.directoriesFirst(learnedOrder)
         let visibleResults = ordered.prefix(resultLimit)
         let rows = visibleResults.map {
-          Row(title: $0.title, subtitle: $0.subtitle, action: "Open", target: .file($0))
+          Row(
+            title: $0.title,
+            subtitle: $0.subtitle,
+            symbolName: $0.isDirectory ? "folder" : "doc",
+            action: "Open",
+            target: .file($0)
+          )
         }
         self.setRows(
           rows.isEmpty

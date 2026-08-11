@@ -238,6 +238,24 @@ final class RiverTests: XCTestCase {
       SpotlightSearch.filenamePredicate(for: "my \"file\""),
       "kMDItemFSName == \"*my \\\"file\\\"*\"cd"
     )
+    XCTAssertEqual(
+      SpotlightSearch.directoryPredicate(for: "my \"file\""),
+      "(kMDItemFSName == \"*my \\\"file\\\"*\"cd) && (kMDItemContentType == \"public.folder\")"
+    )
+  }
+
+  func testFileResultsPutDirectoriesFirstWithoutChangingOrderWithinEachGroup() {
+    let results = [
+      FileResult(path: "/first-file", isDirectory: false),
+      FileResult(path: "/first-folder", isDirectory: true),
+      FileResult(path: "/second-file", isDirectory: false),
+      FileResult(path: "/second-folder", isDirectory: true),
+    ]
+
+    XCTAssertEqual(
+      FileResult.directoriesFirst(results).map(\.path),
+      ["/first-folder", "/second-folder", "/first-file", "/second-file"]
+    )
   }
 
   func testPathExpansionLeavesAbsolutePathsAlone() {
@@ -403,6 +421,30 @@ final class RiverTests: XCTestCase {
     // Process startup can be delayed by macOS executable scanning on a busy machine.
     // Keep the XCTest allowance beyond River's own five-second plugin timeout.
     wait(for: [finished], timeout: 7)
+  }
+
+  func testVerbosePluginOutputDoesNotBlockTheProcess() throws {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("river-verbose-plugin-test-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let pluginURL = directory.appendingPathComponent("verbose")
+    try "#!/bin/sh\nyes x | head -c 131072\n".write(
+      to: pluginURL, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: pluginURL.path)
+
+    var config = AppConfig()
+    config.pluginDirectory = directory.path
+    config.pluginTimeoutMilliseconds = 2_000
+
+    let finished = expectation(description: "verbose plugin finished")
+    let runner = PluginRunner()
+    runner.run(PluginRequest(input: "/verbose")!, config: config) { output in
+      XCTAssertGreaterThan(output.utf8.count, 100_000)
+      finished.fulfill()
+    }
+    wait(for: [finished], timeout: 4)
   }
 
   func testGoogleLuckyRedirectIsUnwrapped() {

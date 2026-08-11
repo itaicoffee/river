@@ -1,9 +1,22 @@
 import AppKit
 import CoreServices
+import Darwin
 import Foundation
 
 struct FileResult: Equatable {
   let path: String
+  let isDirectory: Bool
+
+  init(path: String) {
+    var directoryFlag = ObjCBool(false)
+    let exists = FileManager.default.fileExists(atPath: path, isDirectory: &directoryFlag)
+    self.init(path: path, isDirectory: exists && directoryFlag.boolValue)
+  }
+
+  init(path: String, isDirectory: Bool) {
+    self.path = path
+    self.isDirectory = isDirectory
+  }
 
   var title: String { URL(fileURLWithPath: path).lastPathComponent }
 
@@ -14,6 +27,10 @@ struct FileResult: Equatable {
   var subtitle: String {
     let home = Paths.homeDirectory
     return path.hasPrefix(home) ? "~" + path.dropFirst(home.count) : path
+  }
+
+  static func directoriesFirst(_ results: [FileResult]) -> [FileResult] {
+    results.filter(\.isDirectory) + results.filter { !$0.isDirectory }
   }
 }
 
@@ -284,26 +301,37 @@ final class ApplicationCatalog {
   }
 
   private let applications: [IndexedApplication]
+  private let exactMatches: [String: ApplicationResult]
 
   init(applicationURLs: [URL]? = nil) {
     let urls = applicationURLs ?? Self.discoverApplicationURLs()
     var seenPaths = Set<String>()
-    applications = urls.compactMap { url in
+    var indexedApplications: [IndexedApplication] = []
+    var exactMatches: [String: ApplicationResult] = [:]
+    indexedApplications.reserveCapacity(urls.count)
+
+    for url in urls {
       let standardized = url.standardizedFileURL
       guard standardized.pathExtension.lowercased() == "app",
         seenPaths.insert(standardized.path).inserted
-      else { return nil }
+      else { continue }
 
       let result = ApplicationResult(
         name: standardized.deletingPathExtension().lastPathComponent, url: standardized
       )
-      return IndexedApplication(result: result, normalizedName: Self.normalized(result.name))
+      let normalizedName = Self.normalized(result.name)
+      indexedApplications.append(
+        IndexedApplication(result: result, normalizedName: normalizedName)
+      )
+      if exactMatches[normalizedName] == nil { exactMatches[normalizedName] = result }
     }
+
+    applications = indexedApplications
+    self.exactMatches = exactMatches
   }
 
   func exactMatch(named query: String) -> ApplicationResult? {
-    let normalizedQuery = Self.normalized(query)
-    return applications.first { $0.normalizedName == normalizedQuery }?.result
+    exactMatches[Self.normalized(query)]
   }
 
   func matches(
@@ -426,49 +454,31 @@ final class SpotlightSearch {
     queue.asyncAfter(deadline: .now() + 0.08) { [weak self] in
       guard let self, self.isCurrent(requestedGeneration) else { return }
 
-      let spotlight = Process()
-      spotlight.executableURL = URL(fileURLWithPath: "/usr/bin/mdfind")
-      spotlight.arguments = [Self.filenamePredicate(for: trimmed)]
-
-      let head = Process()
-      head.executableURL = URL(fileURLWithPath: "/usr/bin/head")
-      head.arguments = ["-n", String(limit)]
-
-      let link = Pipe()
-      let output = Pipe()
-      spotlight.standardOutput = link
-      spotlight.standardError = FileHandle.nullDevice
-      head.standardInput = link
-      head.standardOutput = output
-      head.standardError = FileHandle.nullDevice
-
       do {
-        try spotlight.run()
-        try head.run()
-        guard self.register([spotlight, head], for: requestedGeneration) else {
-          Self.terminate([spotlight, head])
-          return
-        }
+        // Spotlight does not rank folders ahead of files. Reserve a separate folder
+        // query so a common name cannot push every matching folder past `head`.
+        guard
+          let directoryPaths = try self.paths(
+            matching: Self.directoryPredicate(for: trimmed),
+            limit: limit,
+            generation: requestedGeneration
+          ),
+          let otherPaths = try self.paths(
+            matching: Self.filenamePredicate(for: trimmed),
+            limit: limit,
+            generation: requestedGeneration
+          )
+        else { return }
 
-        // Drain while `head` is running. Waiting first can fill the pipe buffer and
-        // deadlock on searches that return many long paths.
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        head.waitUntilExit()
-        if spotlight.isRunning { spotlight.terminate() }
-        self.clearProcesses(for: requestedGeneration)
-
-        let paths =
-          String(data: data, encoding: .utf8)?
-          .split(whereSeparator: { $0.isNewline })
-          .map(String.init) ?? []
-        let results = paths.map(FileResult.init(path:))
+        var seen = Set<String>()
+        let paths = (directoryPaths + otherPaths).filter { seen.insert($0).inserted }
+        let results = FileResult.directoriesFirst(paths.map(FileResult.init(path:)))
 
         DispatchQueue.main.async { [weak self] in
           guard let self, self.isCurrent(requestedGeneration) else { return }
           completion(results)
         }
       } catch {
-        Self.terminate([spotlight, head])
         self.clearProcesses(for: requestedGeneration)
         DispatchQueue.main.async { [weak self] in
           guard let self, self.isCurrent(requestedGeneration) else { return }
@@ -520,12 +530,63 @@ final class SpotlightSearch {
     }
   }
 
+  private func paths(
+    matching predicate: String,
+    limit: Int,
+    generation requestedGeneration: Int
+  ) throws -> [String]? {
+    let spotlight = Process()
+    spotlight.executableURL = URL(fileURLWithPath: "/usr/bin/mdfind")
+    spotlight.arguments = [predicate]
+
+    let head = Process()
+    head.executableURL = URL(fileURLWithPath: "/usr/bin/head")
+    head.arguments = ["-n", String(limit)]
+
+    let link = Pipe()
+    let output = Pipe()
+    spotlight.standardOutput = link
+    spotlight.standardError = FileHandle.nullDevice
+    head.standardInput = link
+    head.standardOutput = output
+    head.standardError = FileHandle.nullDevice
+
+    do {
+      try spotlight.run()
+      try head.run()
+    } catch {
+      Self.terminate([spotlight, head])
+      throw error
+    }
+    guard register([spotlight, head], for: requestedGeneration) else {
+      Self.terminate([spotlight, head])
+      return nil
+    }
+
+    // Drain while `head` is running. Waiting first can fill the pipe buffer and
+    // deadlock on searches that return many long paths.
+    let data = output.fileHandleForReading.readDataToEndOfFile()
+    head.waitUntilExit()
+    if spotlight.isRunning { spotlight.terminate() }
+    clearProcesses(for: requestedGeneration)
+
+    guard isCurrent(requestedGeneration) else { return nil }
+    return
+      String(data: data, encoding: .utf8)?
+      .split(whereSeparator: { $0.isNewline })
+      .map(String.init) ?? []
+  }
+
   static func filenamePredicate(for query: String) -> String {
     let escaped =
       query
       .replacingOccurrences(of: "\\", with: "\\\\")
       .replacingOccurrences(of: "\"", with: "\\\"")
     return "kMDItemFSName == \"*\(escaped)*\"cd"
+  }
+
+  static func directoryPredicate(for query: String) -> String {
+    "(\(filenamePredicate(for: query))) && (kMDItemContentType == \"public.folder\")"
   }
 }
 
@@ -554,7 +615,9 @@ struct PluginRequest: Equatable {
 
 final class PluginRunner {
   private let queue = DispatchQueue(label: "river.plugins", qos: .userInitiated)
+  private let stateLock = NSLock()
   private var generation = 0
+  private var activeProcess: Process?
 
   func availablePlugins(in directory: String) -> [String] {
     let path = Paths.expand(directory)
@@ -565,20 +628,23 @@ final class PluginRunner {
   }
 
   func matchingPlugins(prefix: String, in directory: String) -> [String] {
-    availablePlugins(in: directory).filter {
-      prefix.isEmpty || $0.lowercased().hasPrefix(prefix.lowercased())
+    let normalizedPrefix = prefix.lowercased()
+    return availablePlugins(in: directory).filter {
+      normalizedPrefix.isEmpty || $0.lowercased().hasPrefix(normalizedPrefix)
     }
   }
 
   func run(_ request: PluginRequest, config: AppConfig, completion: @escaping (String) -> Void) {
-    generation += 1
-    let requestedGeneration = generation
+    let requestedGeneration = beginRequest()
 
     queue.asyncAfter(deadline: .now() + 0.06) { [weak self] in
-      guard let self, requestedGeneration == self.generation else { return }
+      guard let self, self.isCurrent(requestedGeneration) else { return }
       let executable = Paths.expand(config.pluginDirectory) + "/" + request.name
       guard FileManager.default.isExecutableFile(atPath: executable) else {
-        DispatchQueue.main.async { completion("Unknown command /\(request.name)") }
+        DispatchQueue.main.async { [weak self] in
+          guard let self, self.isCurrent(requestedGeneration) else { return }
+          completion("Unknown command /\(request.name)")
+        }
         return
       }
 
@@ -592,23 +658,39 @@ final class PluginRunner {
 
       do {
         try process.run()
+        guard self.register(process, for: requestedGeneration) else {
+          process.terminate()
+          return
+        }
       } catch {
-        DispatchQueue.main.async { completion("Could not run /\(request.name)") }
+        DispatchQueue.main.async { [weak self] in
+          guard let self, self.isCurrent(requestedGeneration) else { return }
+          completion("Could not run /\(request.name)")
+        }
         return
       }
 
+      // Drain both streams while the child is running. Waiting first can fill a
+      // pipe buffer and make a chatty plugin appear to hang until its timeout.
+      let outputCollector = PipeCollector(stdout)
+      let errorCollector = PipeCollector(stderr)
       let deadline = DispatchTime.now() + .milliseconds(config.pluginTimeoutMilliseconds)
-      if process.waitUntilExit(before: deadline) == false {
-        process.terminate()
+      let timedOut = process.waitUntilExit(before: deadline) == false
+      if timedOut {
+        Self.terminateAndWait(process)
+      }
+
+      let outputData = outputCollector.readToEnd()
+      let errorData = errorCollector.readToEnd()
+      self.clearProcess(for: requestedGeneration)
+      if timedOut {
         DispatchQueue.main.async { [weak self] in
-          guard let self, requestedGeneration == self.generation else { return }
+          guard let self, self.isCurrent(requestedGeneration) else { return }
           completion("/\(request.name) timed out")
         }
         return
       }
 
-      let outputData = stdout.fileHandleForReading.readDataToEndOfFile()
-      let errorData = stderr.fileHandleForReading.readDataToEndOfFile()
       let output = String(data: outputData, encoding: .utf8)?.trimmingCharacters(
         in: .whitespacesAndNewlines)
       let error = String(data: errorData, encoding: .utf8)?.trimmingCharacters(
@@ -617,14 +699,94 @@ final class PluginRunner {
         output?.isEmpty == false ? output! : (error?.isEmpty == false ? error! : "No output")
 
       DispatchQueue.main.async { [weak self] in
-        guard let self, requestedGeneration == self.generation else { return }
+        guard let self, self.isCurrent(requestedGeneration) else { return }
         completion(message)
       }
     }
   }
 
   func cancel() {
+    _ = beginRequest()
+  }
+
+  private func beginRequest() -> Int {
+    stateLock.lock()
     generation += 1
+    let requestedGeneration = generation
+    let process = activeProcess
+    activeProcess = nil
+    stateLock.unlock()
+    if process?.isRunning == true { process?.terminate() }
+    return requestedGeneration
+  }
+
+  private func isCurrent(_ requestedGeneration: Int) -> Bool {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    return requestedGeneration == generation
+  }
+
+  private func register(_ process: Process, for requestedGeneration: Int) -> Bool {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    guard requestedGeneration == generation else { return false }
+    activeProcess = process
+    return true
+  }
+
+  private func clearProcess(for requestedGeneration: Int) {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    guard requestedGeneration == generation else { return }
+    activeProcess = nil
+  }
+
+  private static func terminateAndWait(_ process: Process) {
+    guard process.isRunning else { return }
+    process.terminate()
+    if process.waitUntilExit(before: .now() + .milliseconds(250)) == false {
+      Darwin.kill(process.processIdentifier, SIGKILL)
+      process.waitUntilExit()
+    }
+  }
+}
+
+private final class PipeCollector {
+  private let group = DispatchGroup()
+  private let lock = NSLock()
+  private var data = Data()
+  private var finished = false
+
+  init(_ pipe: Pipe) {
+    group.enter()
+    pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+      guard let self else {
+        handle.readabilityHandler = nil
+        return
+      }
+
+      let chunk = handle.availableData
+      guard chunk.isEmpty else {
+        self.lock.lock()
+        self.data.append(chunk)
+        self.lock.unlock()
+        return
+      }
+
+      handle.readabilityHandler = nil
+      self.lock.lock()
+      let shouldLeave = !self.finished
+      self.finished = true
+      self.lock.unlock()
+      if shouldLeave { self.group.leave() }
+    }
+  }
+
+  func readToEnd() -> Data {
+    group.wait()
+    lock.lock()
+    defer { lock.unlock() }
+    return data
   }
 }
 
@@ -746,14 +908,15 @@ enum URLBuilder {
 
 final class LuckyResolver {
   private let queue = DispatchQueue(label: "river.lucky", qos: .userInitiated)
+  private let stateLock = NSLock()
   private var generation = 0
+  private var activeProcess: Process?
 
   func resolve(_ luckyURL: URL, fallbackURL: URL, completion: @escaping (URL) -> Void) {
-    generation += 1
-    let requestedGeneration = generation
+    let requestedGeneration = beginRequest()
 
     queue.async { [weak self] in
-      guard let self, requestedGeneration == self.generation else { return }
+      guard let self, self.isCurrent(requestedGeneration) else { return }
       let process = Process()
       let output = Pipe()
       process.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
@@ -768,8 +931,13 @@ final class LuckyResolver {
       var resolved = fallbackURL
       do {
         try process.run()
-        process.waitUntilExit()
+        guard self.register(process, for: requestedGeneration) else {
+          process.terminate()
+          return
+        }
         let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        self.clearProcess(for: requestedGeneration)
         if let headers = String(data: data, encoding: .utf8),
           let location = Self.redirectLocation(in: headers),
           let redirectURL = URL(string: location),
@@ -777,17 +945,52 @@ final class LuckyResolver {
         {
           resolved = target
         }
-      } catch {}
+      } catch {
+        if process.isRunning { process.terminate() }
+        self.clearProcess(for: requestedGeneration)
+      }
 
       DispatchQueue.main.async { [weak self] in
-        guard let self, requestedGeneration == self.generation else { return }
+        guard let self, self.isCurrent(requestedGeneration) else { return }
         completion(resolved)
       }
     }
   }
 
   func cancel() {
+    _ = beginRequest()
+  }
+
+  private func beginRequest() -> Int {
+    stateLock.lock()
     generation += 1
+    let requestedGeneration = generation
+    let process = activeProcess
+    activeProcess = nil
+    stateLock.unlock()
+    if process?.isRunning == true { process?.terminate() }
+    return requestedGeneration
+  }
+
+  private func isCurrent(_ requestedGeneration: Int) -> Bool {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    return requestedGeneration == generation
+  }
+
+  private func register(_ process: Process, for requestedGeneration: Int) -> Bool {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    guard requestedGeneration == generation else { return false }
+    activeProcess = process
+    return true
+  }
+
+  private func clearProcess(for requestedGeneration: Int) {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    guard requestedGeneration == generation else { return }
+    activeProcess = nil
   }
 
   static func redirectLocation(in headers: String) -> String? {

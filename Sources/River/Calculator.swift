@@ -6,6 +6,21 @@ struct CalculationResult: Equatable {
 }
 
 enum Calculator {
+  private static let conversionExpression = try! NSRegularExpression(
+    pattern: #"^(.+?)\s+([A-Za-z°]+)\s+(?:in|to)\s+([A-Za-z°]+)$"#,
+    options: [.caseInsensitive]
+  )
+
+  private static let numberFormatter: NumberFormatter = {
+    let formatter = NumberFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.numberStyle = .decimal
+    formatter.usesGroupingSeparator = false
+    formatter.minimumFractionDigits = 0
+    formatter.maximumFractionDigits = 10
+    return formatter
+  }()
+
   private enum Dimension {
     case length
     case mass
@@ -53,14 +68,9 @@ enum Calculator {
   private static func conversionParts(in input: String) -> (
     expression: String, source: String, target: String
   )? {
-    let pattern = #"^(.+?)\s+([A-Za-z°]+)\s+(?:in|to)\s+([A-Za-z°]+)$"#
-    guard
-      let expression = try? NSRegularExpression(
-        pattern: pattern, options: [.caseInsensitive])
-    else { return nil }
-
     let range = NSRange(input.startIndex..<input.endIndex, in: input)
-    guard let match = expression.firstMatch(in: input, range: range), match.range == range,
+    guard
+      let match = conversionExpression.firstMatch(in: input, range: range), match.range == range,
       let valueRange = Range(match.range(at: 1), in: input),
       let sourceRange = Range(match.range(at: 2), in: input),
       let targetRange = Range(match.range(at: 3), in: input)
@@ -86,13 +96,7 @@ enum Calculator {
       return String(format: "%.10g", locale: Locale(identifier: "en_US_POSIX"), normalized)
     }
 
-    let formatter = NumberFormatter()
-    formatter.locale = Locale(identifier: "en_US_POSIX")
-    formatter.numberStyle = .decimal
-    formatter.usesGroupingSeparator = false
-    formatter.minimumFractionDigits = 0
-    formatter.maximumFractionDigits = 10
-    return formatter.string(from: NSNumber(value: normalized)) ?? String(normalized)
+    return numberFormatter.string(from: NSNumber(value: normalized)) ?? String(normalized)
   }
 
   private static let units: [String: UnitDefinition] = {

@@ -23,6 +23,8 @@ final class ResultKnowledge {
   private let path: String
   private let now: () -> Date
   private var selections: [Selection]
+  private var rankedIdentifiersByQuery: [String: [String]] = [:]
+  private var nextExpiration = Date.distantFuture
 
   init(path: String = Paths.knowledgeFile, now: @escaping () -> Date = Date.init) {
     self.path = path
@@ -36,27 +38,30 @@ final class ResultKnowledge {
     } else {
       selections = []
     }
-    prune()
+    prune(at: now())
   }
 
   func record(query: String, itemIdentifier: String) {
     let normalizedQuery = Self.normalizedQuery(query)
     guard !normalizedQuery.isEmpty, !itemIdentifier.isEmpty else { return }
 
+    let selectedAt = now()
     selections.append(
       Selection(
         query: normalizedQuery,
         itemIdentifier: itemIdentifier,
-        selectedAt: now()
+        selectedAt: selectedAt
       ))
-    prune()
+    rankedIdentifiersByQuery.removeValue(forKey: normalizedQuery)
+    prune(at: selectedAt)
     persist()
   }
 
   func rankedItemIdentifiers(for query: String) -> [String] {
-    prune()
     let normalizedQuery = Self.normalizedQuery(query)
     guard !normalizedQuery.isEmpty else { return [] }
+    pruneIfNeeded()
+    if let cached = rankedIdentifiersByQuery[normalizedQuery] { return cached }
 
     var ranks: [String: Rank] = [:]
     for selection in selections where selection.query == normalizedQuery {
@@ -67,7 +72,7 @@ final class ResultKnowledge {
       ranks[selection.itemIdentifier] = rank
     }
 
-    return ranks.keys.sorted { left, right in
+    let identifiers = ranks.keys.sorted { left, right in
       guard let leftRank = ranks[left], let rightRank = ranks[right] else { return left < right }
       if leftRank.count != rightRank.count { return leftRank.count > rightRank.count }
       if leftRank.lastSelectedAt != rightRank.lastSelectedAt {
@@ -75,6 +80,8 @@ final class ResultKnowledge {
       }
       return left < right
     }
+    rankedIdentifiersByQuery[normalizedQuery] = identifiers
+    return identifiers
   }
 
   func hasPreference(for query: String, itemIdentifier: String) -> Bool {
@@ -112,8 +119,14 @@ final class ResultKnowledge {
       .lowercased()
   }
 
-  private func prune() {
-    let cutoff = now().addingTimeInterval(-Self.retentionInterval)
+  private func pruneIfNeeded() {
+    let currentDate = now()
+    if currentDate > nextExpiration { prune(at: currentDate) }
+  }
+
+  private func prune(at currentDate: Date) {
+    let originalCount = selections.count
+    let cutoff = currentDate.addingTimeInterval(-Self.retentionInterval)
     selections.removeAll { $0.selectedAt < cutoff }
     if selections.count > Self.maximumSelectionCount {
       selections = Array(
@@ -122,6 +135,10 @@ final class ResultKnowledge {
           .reversed()
       )
     }
+    if selections.count != originalCount { rankedIdentifiersByQuery.removeAll() }
+    nextExpiration =
+      selections.map { $0.selectedAt.addingTimeInterval(Self.retentionInterval) }.min()
+      ?? .distantFuture
   }
 
   private func persist() {

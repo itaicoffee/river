@@ -41,6 +41,7 @@ To update, run the one-line installer again. Your configuration and plugins are 
 | `15% of 80` | Calculates percentages |
 | `10 km in mi` | Converts common units |
 | `define word` | Shows a definition; Return opens Dictionary |
+| `emoji heart` | Fuzzy-matches emoji names; arrows choose one and Return copies it |
 | Quicklink name + query | Opens a configured URL or local path |
 | `ai anything` | Opens the query in ChatGPT Chat |
 | `work anything` | Opens the query in ChatGPT Work |

@@ -174,17 +174,45 @@ final class RiverTests: XCTestCase {
     XCTAssertNil(StockRequest(input: "stock ../AAPL"))
   }
 
+  func testEmojiRequestParsing() {
+    XCTAssertEqual(EmojiRequest(input: "emoji heart"), EmojiRequest(query: "heart"))
+    XCTAssertEqual(EmojiRequest(input: " EMOJI   kitty  "), EmojiRequest(query: "kitty"))
+    XCTAssertNil(EmojiRequest(input: "emoji"))
+    XCTAssertNil(EmojiRequest(input: "emojified heart"))
+  }
+
+  func testEmojiCatalogFuzzyMatchesNamesAliasesAndFlags() {
+    XCTAssertEqual(EmojiCatalog.matches("heart").first?.emoji, "❤️")
+    XCTAssertEqual(EmojiCatalog.matches("hrt").first?.emoji, "❤️")
+    XCTAssertEqual(EmojiCatalog.matches("kitty").first?.emoji, "🐈")
+    XCTAssertEqual(EmojiCatalog.matches("slovenia").first?.emoji, "🇸🇮")
+    XCTAssertTrue(EmojiCatalog.matches("woman developer").contains(where: {
+      $0.emoji == "👩‍💻"
+    }))
+  }
+
+  func testEmojiCatalogHonorsLimitAndRejectsEmptyQueries() {
+    XCTAssertEqual(EmojiCatalog.matches("face", limit: 3).count, 3)
+    XCTAssertTrue(EmojiCatalog.matches("   ").isEmpty)
+    XCTAssertTrue(EmojiCatalog.matches("face", limit: 0).isEmpty)
+  }
+
   func testStockQuoteParsingAndFormatting() {
-    let data = Data(
+    let quoteData = Data(
       """
       {"chart":{"result":[{"meta":{"currency":"USD","symbol":"AAPL",
       "fullExchangeName":"NasdaqGS","regularMarketPrice":306.605,
-      "longName":"Apple Inc.","previousClose":308.26,"priceHint":2}}],"error":null}}
+      "longName":"Apple Inc.","priceHint":2}}],"error":null}}
+      """.utf8)
+    let marketCapData = Data(
+      """
+      {"timeseries":{"result":[{"trailingMarketCap":[{"reportedValue":{
+      "raw":4498801926800,"fmt":"4.50T"}}]}],"error":null}}
       """.utf8)
 
-    let quote = StockQuote.parse(data)
-    XCTAssertEqual(quote?.title, "306.61 USD  −1.66 (−0.54%)")
-    XCTAssertEqual(quote?.subtitle, "Apple Inc. · AAPL · NasdaqGS")
+    let quote = StockQuote.parse(quoteData, marketCapData: marketCapData)
+    XCTAssertEqual(quote?.title, "306.61 USD · 4.50T mkt cap")
+    XCTAssertEqual(quote?.subtitle, "Apple Inc. · Nasdaq")
   }
 
   func testStockURLsEncodeTickerPathComponents() {
@@ -195,6 +223,13 @@ final class RiverTests: XCTestCase {
     XCTAssertEqual(
       StockLookup.quotePageURL(for: "BRK-B")?.absoluteString,
       "https://finance.yahoo.com/quote/BRK-B"
+    )
+    XCTAssertEqual(
+      StockLookup.marketCapURL(
+        for: "AAPL", now: Date(timeIntervalSince1970: 1_786_406_400)
+      )?.absoluteString,
+      "https://query2.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/"
+        + "timeseries/AAPL?symbol=AAPL&type=trailingMarketCap&period1=1782518400&period2=1786492800"
     )
   }
 
@@ -227,6 +262,7 @@ final class RiverTests: XCTestCase {
     XCTAssertTrue(items.contains(where: { $0.replacement == "river settings" }))
     XCTAssertTrue(items.contains(where: { $0.replacement == "ai " }))
     XCTAssertTrue(items.contains(where: { $0.replacement == "stock " }))
+    XCTAssertTrue(items.contains(where: { $0.replacement == "emoji " }))
     XCTAssertEqual(
       items.first(where: { $0.title == "github" }),
       CommandCenterItem(

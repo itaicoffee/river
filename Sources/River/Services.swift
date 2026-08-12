@@ -112,6 +112,14 @@ enum CommandCenterCatalog {
         submitsImmediately: false
       ),
       CommandCenterItem(
+        title: "Find an Emoji",
+        subtitle: "Input · Fuzzy search and copy an emoji",
+        symbolName: "face.smiling",
+        action: "Complete",
+        replacement: "emoji ",
+        submitsImmediately: false
+      ),
+      CommandCenterItem(
         title: "I'm Feeling Lucky",
         subtitle: "Input · Open Google's first result",
         symbolName: "wand.and.stars",
@@ -259,36 +267,42 @@ struct StockQuote: Equatable {
   let exchange: String?
   let currency: String?
   let price: Decimal
-  let previousClose: Decimal?
+  let marketCap: Decimal?
   let priceHint: Int
 
   var title: String {
     let priceText = Self.format(price, fractionDigits: priceHint)
     let currentPrice = currency.map { "\(priceText) \($0)" } ?? priceText
-    guard let previousClose, previousClose != 0 else { return currentPrice }
-
-    let change = price - previousClose
-    let percentChange = change / previousClose * 100
-    let sign = change < 0 ? "−" : "+"
-    let absoluteChange = change < 0 ? -change : change
-    let absolutePercentChange = percentChange < 0 ? -percentChange : percentChange
-    return "\(currentPrice)  \(sign)\(Self.format(absoluteChange, fractionDigits: priceHint)) "
-      + "(\(sign)\(Self.format(absolutePercentChange, fractionDigits: 2))%)"
+    let marketCapText = marketCap.map { "\(Self.compact($0)) mkt cap" }
+      ?? "Mkt cap unavailable"
+    return "\(currentPrice) · \(marketCapText)"
   }
 
   var subtitle: String {
-    [name, symbol, exchange].compactMap { value in
+    [name, Self.displayName(for: exchange)].compactMap { value in
       guard let value, !value.isEmpty else { return nil }
       return value
     }.joined(separator: " · ")
   }
 
-  static func parse(_ data: Data) -> StockQuote? {
-    guard let meta = try? JSONDecoder().decode(ChartEnvelope.self, from: data)
+  private static func displayName(for exchange: String?) -> String? {
+    switch exchange {
+    case "NasdaqGS", "NasdaqGM", "NasdaqCM": return "Nasdaq"
+    default: return exchange
+    }
+  }
+
+  static func parse(_ data: Data, marketCapData: Data? = nil) -> StockQuote? {
+    let decoder = JSONDecoder()
+    guard let meta = try? decoder.decode(ChartEnvelope.self, from: data)
       .chart.result?.first?.meta,
       let price = meta.regularMarketPrice
     else {
       return nil
+    }
+    let marketCap = marketCapData.flatMap {
+      try? decoder.decode(MarketCapEnvelope.self, from: $0)
+        .timeseries.result?.first?.trailingMarketCap?.last?.reportedValue.raw
     }
 
     return StockQuote(
@@ -297,9 +311,31 @@ struct StockQuote: Equatable {
       exchange: meta.fullExchangeName,
       currency: meta.currency,
       price: price,
-      previousClose: meta.previousClose ?? meta.chartPreviousClose,
+      marketCap: marketCap,
       priceHint: max(0, min(meta.priceHint ?? 2, 8))
     )
+  }
+
+  private static func compact(_ value: Decimal) -> String {
+    let scale: Decimal
+    let suffix: String
+    if value >= 1_000_000_000_000 {
+      scale = 1_000_000_000_000
+      suffix = "T"
+    } else if value >= 1_000_000_000 {
+      scale = 1_000_000_000
+      suffix = "B"
+    } else if value >= 1_000_000 {
+      scale = 1_000_000
+      suffix = "M"
+    } else if value >= 1_000 {
+      scale = 1_000
+      suffix = "K"
+    } else {
+      scale = 1
+      suffix = ""
+    }
+    return format(value / scale, fractionDigits: suffix.isEmpty ? 0 : 2) + suffix
   }
 
   private static func format(_ value: Decimal, fractionDigits: Int) -> String {
@@ -332,10 +368,52 @@ struct StockQuote: Equatable {
       let regularMarketPrice: Decimal?
       let longName: String?
       let shortName: String?
-      let chartPreviousClose: Decimal?
-      let previousClose: Decimal?
       let priceHint: Int?
     }
+  }
+
+  private struct MarketCapEnvelope: Decodable {
+    let timeseries: TimeSeries
+
+    struct TimeSeries: Decodable {
+      let result: [Result]?
+    }
+
+    struct Result: Decodable {
+      let trailingMarketCap: [Point]?
+    }
+
+    struct Point: Decodable {
+      let reportedValue: ReportedValue
+    }
+
+    struct ReportedValue: Decodable {
+      let raw: Decimal
+    }
+  }
+}
+
+private final class StockResponseParts {
+  private let lock = NSLock()
+  private var priceData: Data?
+  private var marketCapData: Data?
+
+  func setPriceData(_ data: Data?) {
+    lock.lock()
+    priceData = data
+    lock.unlock()
+  }
+
+  func setMarketCapData(_ data: Data?) {
+    lock.lock()
+    marketCapData = data
+    lock.unlock()
+  }
+
+  func snapshot() -> (price: Data?, marketCap: Data?) {
+    lock.lock()
+    defer { lock.unlock() }
+    return (priceData, marketCapData)
   }
 }
 
@@ -343,7 +421,7 @@ final class StockLookup {
   private let session: URLSession
   private var generation = 0
   private var pendingWorkItem: DispatchWorkItem?
-  private var activeTask: URLSessionDataTask?
+  private var activeTasks: [URLSessionDataTask] = []
 
   init(session: URLSession = .shared) {
     self.session = session
@@ -354,25 +432,40 @@ final class StockLookup {
     let requestedGeneration = generation
     let workItem = DispatchWorkItem { [weak self] in
       guard let self, requestedGeneration == self.generation,
-        let url = Self.quoteURL(for: request.symbol)
+        let quoteURL = Self.quoteURL(for: request.symbol),
+        let marketCapURL = Self.marketCapURL(for: request.symbol)
       else {
         return
       }
 
-      var urlRequest = URLRequest(url: url)
-      urlRequest.timeoutInterval = 6
-      urlRequest.setValue("River/1.0", forHTTPHeaderField: "User-Agent")
-      let task = self.session.dataTask(with: urlRequest) { [weak self] data, response, error in
-        DispatchQueue.main.async {
-          guard let self, requestedGeneration == self.generation else { return }
-          self.activeTask = nil
+      self.pendingWorkItem = nil
+      let group = DispatchGroup()
+      let parts = StockResponseParts()
+      func dataTask(for url: URL, store: @escaping (Data?) -> Void) -> URLSessionDataTask {
+        var urlRequest = URLRequest(url: url)
+        urlRequest.timeoutInterval = 6
+        urlRequest.setValue("River/1.0", forHTTPHeaderField: "User-Agent")
+        group.enter()
+        return self.session.dataTask(with: urlRequest) { data, response, error in
           let status = (response as? HTTPURLResponse)?.statusCode
-          let quote = error == nil && status == 200 ? data.flatMap(StockQuote.parse) : nil
-          completion(quote)
+          store(error == nil && status == 200 ? data : nil)
+          group.leave()
         }
       }
-      self.activeTask = task
-      task.resume()
+
+      let quoteTask = dataTask(for: quoteURL, store: parts.setPriceData)
+      let marketCapTask = dataTask(for: marketCapURL, store: parts.setMarketCapData)
+      self.activeTasks = [quoteTask, marketCapTask]
+      self.activeTasks.forEach { $0.resume() }
+      group.notify(queue: .main) { [weak self] in
+        guard let self, requestedGeneration == self.generation else { return }
+        self.activeTasks = []
+        let data = parts.snapshot()
+        let quote = data.price.flatMap {
+          StockQuote.parse($0, marketCapData: data.marketCap)
+        }
+        completion(quote)
+      }
     }
     pendingWorkItem = workItem
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: workItem)
@@ -382,8 +475,8 @@ final class StockLookup {
     generation += 1
     pendingWorkItem?.cancel()
     pendingWorkItem = nil
-    activeTask?.cancel()
-    activeTask = nil
+    activeTasks.forEach { $0.cancel() }
+    activeTasks = []
   }
 
   static func quoteURL(for symbol: String) -> URL? {
@@ -395,6 +488,21 @@ final class StockLookup {
     return URL(
       string: "https://query2.finance.yahoo.com/v8/finance/chart/\(encodedSymbol)"
         + "?range=1d&interval=1m")
+  }
+
+  static func marketCapURL(for symbol: String, now: Date = Date()) -> URL? {
+    let pathCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
+    guard let encodedSymbol = symbol.addingPercentEncoding(withAllowedCharacters: pathCharacters)
+    else {
+      return nil
+    }
+    let day: TimeInterval = 24 * 60 * 60
+    let period1 = Int(now.addingTimeInterval(-45 * day).timeIntervalSince1970)
+    let period2 = Int(now.addingTimeInterval(day).timeIntervalSince1970)
+    return URL(
+      string: "https://query2.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/"
+        + "timeseries/\(encodedSymbol)?symbol=\(encodedSymbol)&type=trailingMarketCap"
+        + "&period1=\(period1)&period2=\(period2)")
   }
 
   static func quotePageURL(for symbol: String) -> URL? {

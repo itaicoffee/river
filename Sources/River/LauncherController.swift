@@ -17,6 +17,14 @@ private final class LauncherPanel: NSPanel {
       return true
     }
 
+    if modifiers == .command,
+      event.charactersIgnoringModifiers?.lowercased() == "v",
+      let editor = firstResponder as? NSTextView
+    {
+      editor.paste(nil)
+      return true
+    }
+
     return super.performKeyEquivalent(with: event)
   }
 }
@@ -162,6 +170,7 @@ private enum RiverLayout {
 
 private final class ResultCellView: NSTableCellView {
   private let resultIcon = NSImageView()
+  private let resultEmoji = NSTextField(labelWithString: "")
   let titleLabel = NSTextField(labelWithString: "")
   let subtitleLabel = NSTextField(labelWithString: "")
   private let actionLabel = NSTextField(labelWithString: "")
@@ -170,6 +179,12 @@ private final class ResultCellView: NSTableCellView {
     super.init(frame: frameRect)
     resultIcon.imageScaling = .scaleProportionallyUpOrDown
     resultIcon.translatesAutoresizingMaskIntoConstraints = false
+
+    resultEmoji.font = NSFont(name: "Apple Color Emoji", size: 24)
+      ?? .systemFont(ofSize: 24)
+    resultEmoji.alignment = .center
+    resultEmoji.maximumNumberOfLines = 1
+    resultEmoji.translatesAutoresizingMaskIntoConstraints = false
 
     titleLabel.font = .systemFont(ofSize: 16, weight: .semibold)
     titleLabel.textColor = NSColor.white.withAlphaComponent(0.94)
@@ -194,6 +209,7 @@ private final class ResultCellView: NSTableCellView {
     stack.translatesAutoresizingMaskIntoConstraints = false
 
     addSubview(resultIcon)
+    addSubview(resultEmoji)
     addSubview(stack)
     addSubview(actionLabel)
     NSLayoutConstraint.activate([
@@ -201,6 +217,9 @@ private final class ResultCellView: NSTableCellView {
       resultIcon.centerYAnchor.constraint(equalTo: centerYAnchor),
       resultIcon.widthAnchor.constraint(equalToConstant: 30),
       resultIcon.heightAnchor.constraint(equalToConstant: 30),
+      resultEmoji.leadingAnchor.constraint(equalTo: resultIcon.leadingAnchor),
+      resultEmoji.trailingAnchor.constraint(equalTo: resultIcon.trailingAnchor),
+      resultEmoji.centerYAnchor.constraint(equalTo: resultIcon.centerYAnchor),
       stack.leadingAnchor.constraint(equalTo: resultIcon.trailingAnchor, constant: 12),
       stack.trailingAnchor.constraint(lessThanOrEqualTo: actionLabel.leadingAnchor, constant: -14),
       stack.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -211,14 +230,23 @@ private final class ResultCellView: NSTableCellView {
 
   required init?(coder: NSCoder) { nil }
 
-  func configure(title: String, subtitle: String?, icon: NSImage?, action: String?) {
+  func configure(
+    title: String,
+    subtitle: String?,
+    icon: NSImage?,
+    emoji: String? = nil,
+    action: String?
+  ) {
     titleLabel.stringValue = title
     subtitleLabel.stringValue = subtitle ?? ""
     subtitleLabel.isHidden = subtitle == nil
     resultIcon.image = icon
+    resultIcon.isHidden = emoji != nil
     resultIcon.contentTintColor = icon?.isTemplate == true
       ? NSColor(calibratedRed: 0.38, green: 0.72, blue: 1, alpha: 0.9)
       : nil
+    resultEmoji.stringValue = emoji ?? ""
+    resultEmoji.isHidden = emoji == nil
     actionLabel.stringValue = action.map { "\($0)   ↵" } ?? ""
     actionLabel.isHidden = action == nil
   }
@@ -292,6 +320,7 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
       case pluginSuggestion(String)
       case commandCenter(CommandCenterItem)
       case stock(StockQuote)
+      case emoji(EmojiResult)
     }
 
     let title: String
@@ -483,6 +512,7 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
       title: item.title,
       subtitle: item.subtitle,
       icon: icon(for: item),
+      emoji: emoji(for: item),
       action: item.action
     )
     return cell
@@ -501,6 +531,11 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     default:
       return NSImage(systemSymbolName: row.symbolName, accessibilityDescription: nil)
     }
+  }
+
+  private func emoji(for row: Row) -> String? {
+    guard case .emoji(let result)? = row.target else { return nil }
+    return result.emoji
   }
 
   private func fileIcon(at path: String, size: NSSize) -> NSImage {
@@ -786,6 +821,30 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
           selectFirst: !rows.isEmpty
         )
       }
+      return
+    }
+
+    if let request = EmojiRequest(input: text) {
+      let matches = EmojiCatalog.matches(request.query)
+      let emojiRows = matches.map { result in
+        Row(
+          title: result.name,
+          subtitle: "Emoji",
+          action: "Copy",
+          target: .emoji(result)
+        )
+      }
+      setRows(
+        emojiRows.isEmpty
+          ? [
+            Row(
+              title: "No emoji matching \(request.query)",
+              subtitle: "Try a name such as heart, kitty, smile, or flag",
+              symbolName: "face.smiling"
+            )
+          ] : emojiRows,
+        selectFirst: !emojiRows.isEmpty
+      )
       return
     }
 
@@ -1138,6 +1197,16 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
       return
     }
 
+    if EmojiRequest(input: text) != nil {
+      if rows.indices.contains(selectedIndex),
+        case .emoji(let result)? = rows[selectedIndex].target
+      {
+        copyToPasteboard(result.copyText)
+        dismiss()
+      }
+      return
+    }
+
     if let request = ChatGPTRequest(input: text),
       let url = URLBuilder.chatGPTURL(for: request)
     {
@@ -1386,6 +1455,12 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
         title: "Type a word",
         subtitle: "Look up a Dictionary definition",
         symbolName: "character.book.closed"
+      )
+    case "emoji":
+      return Row(
+        title: "Type an emoji name",
+        subtitle: "Fuzzy matching works too · try heart, hrt, cat, or kitty",
+        symbolName: "face.smiling"
       )
     case "lk":
       return Row(

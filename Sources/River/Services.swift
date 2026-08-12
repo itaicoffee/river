@@ -271,7 +271,7 @@ struct StockQuote: Equatable {
   let priceHint: Int
 
   var title: String {
-    let priceText = Self.format(price, fractionDigits: priceHint)
+    let priceText = Self.format(price, fractionDigits: price < 20 ? priceHint : 0)
     let currentPrice = currency.map { "\(priceText) \($0)" } ?? priceText
     let marketCapText = marketCap.map { "\(Self.compact($0)) mkt cap" }
       ?? "Mkt cap unavailable"
@@ -335,7 +335,8 @@ struct StockQuote: Equatable {
       scale = 1
       suffix = ""
     }
-    return format(value / scale, fractionDigits: suffix.isEmpty ? 0 : 2) + suffix
+    let fractionDigits = suffix == "B" || suffix == "T" ? 1 : (suffix.isEmpty ? 0 : 2)
+    return format(value / scale, fractionDigits: fractionDigits) + suffix
   }
 
   private static func format(_ value: Decimal, fractionDigits: Int) -> String {

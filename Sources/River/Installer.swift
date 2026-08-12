@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 enum Installer {
@@ -6,17 +7,17 @@ enum Installer {
 
   private enum InstallerError: LocalizedError {
     case notInstalled
-    case notRunning
     case restartFailed(String)
+    case signingFailed(String)
 
     var errorDescription: String? {
       switch self {
       case .notInstalled:
         return "River is not installed; run 'river install' first"
-      case .notRunning:
-        return "the River LaunchAgent is not running"
       case .restartFailed(let reason):
         return reason
+      case .signingFailed(let reason):
+        return "could not sign River.app: \(reason)"
       }
     }
   }
@@ -35,6 +36,7 @@ enum Installer {
       try fileManager.copyItem(at: sourceBinary, to: destinationBinary)
     }
     try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: destinationBinary.path)
+    try installAppBundle(from: sourceBinary)
 
     try migrateLegacyConfigurationIfNeeded()
     try seedConfiguration()
@@ -46,11 +48,13 @@ enum Installer {
 
     print("Installed River")
     print("  binary: \(Paths.installedBinary)")
+    print("  app: \(Paths.installedApp)")
     print("  config: \(Paths.configFile)")
     print("  hotkey: Ctrl+F")
   }
 
   static func uninstall() throws {
+    terminateRunningApplications()
     unloadLaunchAgent()
     let fileManager = FileManager.default
     if fileManager.fileExists(atPath: Paths.launchAgent) {
@@ -58,6 +62,9 @@ enum Installer {
     }
     if fileManager.fileExists(atPath: Paths.installedBinary) {
       try fileManager.removeItem(atPath: Paths.installedBinary)
+    }
+    if fileManager.fileExists(atPath: Paths.installedApp) {
+      try fileManager.removeItem(atPath: Paths.installedApp)
     }
     print("Uninstalled River. Your config and plugins were kept at ~/.config/river.")
   }
@@ -68,9 +75,10 @@ enum Installer {
     }
     guard ProcessInfo.processInfo.environment["RIVER_SKIP_LAUNCHCTL"] != "1" else { return }
 
-    guard let pid = runningLaunchAgentPID() else { throw InstallerError.notRunning }
-    guard kill(pid, SIGTERM) == 0 else {
-      throw InstallerError.restartFailed(String(cString: strerror(errno)))
+    terminateRunningApplications()
+    let status = runLaunchctl(["kickstart", "-k", "gui/\(getuid())/\(label)"])
+    guard status == 0 else {
+      throw InstallerError.restartFailed("launchctl kickstart exited with status \(status)")
     }
     print("Restarted River")
   }
@@ -122,16 +130,7 @@ enum Installer {
   }
 
   private static func writeLaunchAgent() throws {
-    let plist: [String: Any] = [
-      "Label": label,
-      "ProgramArguments": [Paths.installedBinary, "run"],
-      "RunAtLoad": true,
-      "KeepAlive": true,
-      "ProcessType": "Interactive",
-      "LimitLoadToSessionType": "Aqua",
-      "StandardOutPath": "/tmp/river.log",
-      "StandardErrorPath": "/tmp/river.log",
-    ]
+    let plist = launchAgentPropertyList
     let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
     let url = URL(fileURLWithPath: Paths.launchAgent)
     try FileManager.default.createDirectory(
@@ -139,10 +138,112 @@ enum Installer {
     try data.write(to: url, options: .atomic)
   }
 
+  static var launchAgentPropertyList: [String: Any] {
+    [
+      "Label": label,
+      "ProgramArguments": ["/usr/bin/open", "-n", "-g", Paths.installedApp, "--args", "run"],
+      "RunAtLoad": true,
+      "ProcessType": "Interactive",
+      "LimitLoadToSessionType": "Aqua",
+      "StandardOutPath": "/tmp/river.log",
+      "StandardErrorPath": "/tmp/river.log",
+    ]
+  }
+
+  static var appInfoPropertyList: [String: Any] {
+    [
+      "CFBundleDevelopmentRegion": "en",
+      "CFBundleDisplayName": "River",
+      "CFBundleExecutable": "river",
+      "CFBundleIdentifier": label,
+      "CFBundleInfoDictionaryVersion": "6.0",
+      "CFBundleName": "River",
+      "CFBundlePackageType": "APPL",
+      "CFBundleShortVersionString": "1.0",
+      "CFBundleVersion": "1",
+      "LSMinimumSystemVersion": "13.0",
+      "LSUIElement": true,
+      "NSHighResolutionCapable": true,
+      "NSLocationUsageDescription":
+        "River uses your location to refresh local weather and UV status plugins.",
+      "NSLocationWhenInUseUsageDescription":
+        "River uses your location to refresh local weather and UV status plugins.",
+      "NSPrincipalClass": "NSApplication",
+    ]
+  }
+
+  private static func installAppBundle(from sourceBinary: URL) throws {
+    let fileManager = FileManager.default
+    let destination = URL(fileURLWithPath: Paths.installedApp)
+    let parent = destination.deletingLastPathComponent()
+    let temporary = parent.appendingPathComponent(".River-installing-\(UUID().uuidString).app")
+    defer { try? fileManager.removeItem(at: temporary) }
+
+    let contents = temporary.appendingPathComponent("Contents")
+    let executableDirectory = contents.appendingPathComponent("MacOS")
+    try fileManager.createDirectory(at: executableDirectory, withIntermediateDirectories: true)
+
+    let executable = executableDirectory.appendingPathComponent("river")
+    try fileManager.copyItem(at: sourceBinary, to: executable)
+    try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+
+    let infoData = try PropertyListSerialization.data(
+      fromPropertyList: appInfoPropertyList, format: .xml, options: 0)
+    try infoData.write(to: contents.appendingPathComponent("Info.plist"), options: .atomic)
+    try signAppBundle(at: temporary)
+
+    if fileManager.fileExists(atPath: destination.path) {
+      try fileManager.removeItem(at: destination)
+    }
+    try fileManager.moveItem(at: temporary, to: destination)
+  }
+
+  private static func signAppBundle(at url: URL) throws {
+    let process = Process()
+    let errorPipe = Pipe()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+    process.arguments = [
+      "--force", "--sign", "-", "--identifier", label,
+      "--requirements", "=designated => identifier \"\(label)\"",
+      url.path,
+    ]
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = errorPipe
+    do {
+      try process.run()
+    } catch {
+      throw InstallerError.signingFailed(error.localizedDescription)
+    }
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else {
+      let data = errorPipe.fileHandleForReading.readDataToEndOfFile()
+      let message = String(data: data, encoding: .utf8)?
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+      let reason = message.flatMap { $0.isEmpty ? nil : $0 } ?? "codesign failed"
+      throw InstallerError.signingFailed(reason)
+    }
+  }
+
   private static func reloadLaunchAgent() {
     guard ProcessInfo.processInfo.environment["RIVER_SKIP_LAUNCHCTL"] != "1" else { return }
+    terminateRunningApplications()
     unloadLaunchAgent()
     runLaunchctl(["bootstrap", "gui/\(getuid())", Paths.launchAgent])
+  }
+
+  private static func terminateRunningApplications() {
+    let currentPID = ProcessInfo.processInfo.processIdentifier
+    let applications = NSRunningApplication.runningApplications(withBundleIdentifier: label)
+      .filter { $0.processIdentifier != currentPID }
+    for application in applications { application.terminate() }
+
+    let deadline = Date().addingTimeInterval(1)
+    while Date() < deadline && applications.contains(where: { !$0.isTerminated }) {
+      RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
+    }
+    for application in applications where !application.isTerminated {
+      application.forceTerminate()
+    }
   }
 
   private static func unloadLaunchAgent() {
@@ -186,25 +287,6 @@ enum Installer {
         try fileManager.removeItem(atPath: path)
       }
     }
-  }
-
-  private static func runningLaunchAgentPID() -> pid_t? {
-    let process = Process()
-    let output = Pipe()
-    process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-    process.arguments = ["print", "gui/\(getuid())/\(label)"]
-    process.standardOutput = output
-    process.standardError = FileHandle.nullDevice
-    do {
-      try process.run()
-    } catch {
-      return nil
-    }
-    process.waitUntilExit()
-    guard process.terminationStatus == 0 else { return nil }
-    let data = output.fileHandleForReading.readDataToEndOfFile()
-    guard let text = String(data: data, encoding: .utf8) else { return nil }
-    return runningPID(in: text)
   }
 
   @discardableResult

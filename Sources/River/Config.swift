@@ -158,6 +158,14 @@ enum Paths {
     expand("~/.local/bin/river")
   }
 
+  static var installedApp: String {
+    expand("~/Library/Application Support/River/River.app")
+  }
+
+  static var installedAppBinary: String {
+    URL(fileURLWithPath: installedApp).appendingPathComponent("Contents/MacOS/river").path
+  }
+
   static var launchAgent: String {
     expand("~/Library/LaunchAgents/dev.itai.river.plist")
   }

@@ -211,8 +211,24 @@ final class RiverTests: XCTestCase {
       """.utf8)
 
     let quote = StockQuote.parse(quoteData, marketCapData: marketCapData)
-    XCTAssertEqual(quote?.title, "306.61 USD · 4.50T mkt cap")
+    XCTAssertEqual(quote?.title, "307 USD · 4.5T mkt cap")
     XCTAssertEqual(quote?.subtitle, "Apple Inc. · Nasdaq")
+
+    let lowPriceData = Data(
+      """
+      {"chart":{"result":[{"meta":{"currency":"USD","symbol":"SOFI",
+      "fullExchangeName":"NasdaqGS","regularMarketPrice":6.425,
+      "longName":"SoFi Technologies, Inc.","priceHint":2}}],"error":null}}
+      """.utf8)
+    let billionCapData = Data(
+      """
+      {"timeseries":{"result":[{"trailingMarketCap":[{"reportedValue":{
+      "raw":6420000000,"fmt":"6.42B"}}]}],"error":null}}
+      """.utf8)
+    XCTAssertEqual(
+      StockQuote.parse(lowPriceData, marketCapData: billionCapData)?.title,
+      "6.43 USD · 6.4B mkt cap"
+    )
   }
 
   func testStockURLsEncodeTickerPathComponents() {
@@ -359,6 +375,20 @@ final class RiverTests: XCTestCase {
       },
       ["weather", "uv", "watts"]
     )
+  }
+
+  func testInstallerRunsFromAnIdentifiedAppBundleForLocationPermission() {
+    XCTAssertEqual(
+      Installer.launchAgentPropertyList["ProgramArguments"] as? [String],
+      ["/usr/bin/open", "-n", "-g", Paths.installedApp, "--args", "run"]
+    )
+    XCTAssertNil(Installer.launchAgentPropertyList["KeepAlive"])
+    XCTAssertEqual(
+      Installer.appInfoPropertyList["CFBundleIdentifier"] as? String,
+      "dev.itai.river"
+    )
+    XCTAssertNotNil(Installer.appInfoPropertyList["NSLocationUsageDescription"])
+    XCTAssertNotNil(Installer.appInfoPropertyList["NSLocationWhenInUseUsageDescription"])
   }
 
   func testBundledWeatherUsesDynamicRiverCoordinatesInsteadOfIPGeolocation() {

@@ -16,9 +16,10 @@ will tell you how to install them if they are missing.
 curl -fsSL https://raw.githubusercontent.com/itaicoffee/river/main/install.sh | sh
 ```
 
-The script downloads the public source, builds it locally with Swift, and installs a single binary
-at `~/.local/bin/river`. It never uses `sudo`. River starts immediately and a user LaunchAgent keeps
-it available after login.
+The script downloads the public source, builds it locally with Swift, and installs the `river` CLI
+at `~/.local/bin/river`. Its background process runs from a small signed app bundle under
+`~/Library/Application Support/River`, giving macOS a stable identity for privacy permissions. It
+never uses `sudo`. River starts immediately and a user LaunchAgent keeps it available after login.
 
 If you prefer to inspect every step before running it:
 
@@ -176,7 +177,8 @@ launching, file search, calculations, unit conversions, and power status are loc
 
 Network requests happen only when an action needs them: web and Lucky searches go to the configured
 search engine, `ai` and `work` open ChatGPT, stock quotes come from Yahoo Finance, definitions use
-macOS Dictionary services, and the bundled weather/UV plugins call `wttr.in`. Status plugins run on
+macOS Dictionary services, and the bundled weather/UV plugins call Open-Meteo with coordinates from
+Core Location. Status plugins run on
 their filename schedule even while River is hidden. Plugins are programs on your machine and run
 with your user permissions, so only install plugins you trust.
 

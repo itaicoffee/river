@@ -70,7 +70,8 @@ River is a small Swift executable built directly on AppKit, Carbon, and Core Ser
 4. App and file choices are ranked locally. River remembers recent selections for four weeks so
    repeated queries put the result you actually use first.
 5. Configuration is polled and reloaded live. Plugins are discovered from their directory each time
-   they are needed, so editing either one does not require rebuilding or restarting River.
+   they are needed. Scheduled status plugins refresh independently and publish cached output, so
+   opening River never waits for a script or network request.
 
 There are no third-party Swift dependencies. The release binary links only to macOS frameworks.
 
@@ -142,6 +143,28 @@ Typing `/hello friend` now displays `hello friend`. The installer seeds `uv`, `w
 the same way and never overwrites a plugin you edit. UV and weather call `wttr.in`, which infers
 location from your public IP. Watts reads the power-adapter information published by macOS.
 
+### Status plugins
+
+Add a refresh interval to an executable plugin's filename to turn it into a status plugin:
+
+```text
+weather.10m.zsh
+stocks.30s.sh
+watts.10s.zsh
+uv.15m.zsh
+```
+
+River runs these scripts continuously in the background and shows their cached output in a separate
+status rectangle below the launcher. Opening River only reads the cache, so even network-backed
+values appear immediately. Intervals use `s`, `m`, `h`, or `d`, have a five-second minimum, and may
+appear before an optional file extension. Numeric prefixes such as `010-weather.10m.zsh` control
+display order without becoming part of the placeholder name.
+
+Each refresh captures the first non-empty line of stdout. Runs never overlap for the same plugin,
+at most two status plugins execute concurrently, and the existing `plugin_timeout_ms` setting also
+applies to them. When a refresh fails or times out, River keeps showing the last successful value.
+Status plugins are rescanned live and are not exposed as slash commands.
+
 ## Privacy and security
 
 River has no telemetry and no River-operated service. Configuration, plugins, and learned rankings
@@ -150,8 +173,9 @@ launching, file search, calculations, unit conversions, and power status are loc
 
 Network requests happen only when an action needs them: web and Lucky searches go to the configured
 search engine, `ai` and `work` open ChatGPT, stock quotes come from Yahoo Finance, definitions use
-macOS Dictionary services, and the bundled weather/UV plugins call `wttr.in`. Plugins are programs
-on your machine and run with your user permissions, so only install plugins you trust.
+macOS Dictionary services, and the bundled weather/UV plugins call `wttr.in`. Status plugins run on
+their filename schedule even while River is hidden. Plugins are programs on your machine and run
+with your user permissions, so only install plugins you trust.
 
 The one-line installer is provided for convenience. It builds the public source locally and does
 not elevate privileges. If piping a script into a shell is not your style, use the inspectable Git

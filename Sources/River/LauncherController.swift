@@ -144,6 +144,9 @@ private enum RiverLayout {
   static let resultsClipAllowance: CGFloat = 1
   static let dividerHeight: CGFloat = 1
   static let cornerRadius: CGFloat = 18
+  static let statusGap: CGFloat = 12
+  static let statusSurfaceHeight: CGFloat = 54
+  static let statusHorizontalPadding: CGFloat = 14
   static let maximumVisibleRows = 5
 
   static var windowWidth: CGFloat { surfaceWidth + glowInset * 2 }
@@ -313,6 +316,7 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
   }
 
   private let configStore: ConfigStore
+  private let statusPlugins: StatusPluginManager
   private let spotlight = SpotlightSearch()
   private let plugins = PluginRunner()
   private let lucky = LuckyResolver()
@@ -321,13 +325,18 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
   private let knowledge: ResultKnowledge
   private let panel: LauncherPanel
   private let surface = GlowView()
+  private let statusSurface = GlowView()
+  private let statusStack = NSStackView()
   private let input = NSTextField()
   private let table = NSTableView()
   private let scrollView = NSScrollView()
   private let divider = NSView()
   private let fileIconCache = NSCache<NSString, NSImage>()
   private var resultsVerticalConstraints: [NSLayoutConstraint] = []
+  private var statusVerticalConstraints: [NSLayoutConstraint] = []
+  private var mainSurfaceBottomConstraint: NSLayoutConstraint!
   private var rows: [Row] = []
+  private var statusSnapshots: [StatusPluginSnapshot] = []
   private var cachedPluginDirectory: String?
   private var cachedPluginNames: [String]?
   private var selectedIndex = 0
@@ -335,8 +344,13 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
   private var updatingSelection = false
   private var luckyStatusWorkItem: DispatchWorkItem?
 
-  init(configStore: ConfigStore, knowledge: ResultKnowledge = ResultKnowledge()) {
+  init(
+    configStore: ConfigStore,
+    statusPlugins: StatusPluginManager,
+    knowledge: ResultKnowledge = ResultKnowledge()
+  ) {
     self.configStore = configStore
+    self.statusPlugins = statusPlugins
     self.knowledge = knowledge
     panel = LauncherPanel(
       contentRect: NSRect(
@@ -353,6 +367,10 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     fileIconCache.countLimit = 100
     configureWindow()
     configureContent()
+    statusPlugins.onChange = { [weak self] snapshots in
+      self?.setStatusPlugins(snapshots)
+    }
+    setStatusPlugins(statusPlugins.snapshots)
   }
 
   var isVisible: Bool { panel.isVisible }
@@ -363,6 +381,7 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
 
   func show() {
     stopLuckyPresentation()
+    setStatusPlugins(statusPlugins.snapshots)
     rows = []
     selectedIndex = 0
     cachedPluginDirectory = nil
@@ -542,6 +561,36 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     surface.layer?.shadowOffset = CGSize(width: 0, height: -6)
     surface.translatesAutoresizingMaskIntoConstraints = false
 
+    statusSurface.appearance = NSAppearance(named: .darkAqua)
+    statusSurface.layer?.cornerRadius = RiverLayout.cornerRadius
+    if #available(macOS 10.15, *) { statusSurface.layer?.cornerCurve = .continuous }
+    statusSurface.layer?.masksToBounds = false
+    statusSurface.layer?.borderWidth = 1
+    statusSurface.layer?.borderColor = NSColor(
+      calibratedRed: 0.28,
+      green: 0.55,
+      blue: 0.82,
+      alpha: 0.34
+    ).cgColor
+    statusSurface.layer?.shadowColor = NSColor(
+      calibratedRed: 0.02,
+      green: 0.25,
+      blue: 0.55,
+      alpha: 1
+    ).cgColor
+    statusSurface.layer?.shadowOpacity = 0.32
+    statusSurface.layer?.shadowRadius = 18
+    statusSurface.layer?.shadowOffset = CGSize(width: 0, height: -4)
+    statusSurface.isHidden = true
+    statusSurface.translatesAutoresizingMaskIntoConstraints = false
+
+    statusStack.orientation = .horizontal
+    statusStack.alignment = .centerY
+    statusStack.distribution = .fillEqually
+    statusStack.spacing = 0
+    statusStack.translatesAutoresizingMaskIntoConstraints = false
+    statusSurface.addSubview(statusStack)
+
     input.placeholderString = nil
     input.font = .systemFont(ofSize: 24, weight: .regular)
     input.textColor = NSColor.white.withAlphaComponent(0.96)
@@ -585,6 +634,7 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     surface.addSubview(divider)
     surface.addSubview(scrollView)
     root.addSubview(surface)
+    root.addSubview(statusSurface)
     panel.contentView = root
 
     resultsVerticalConstraints = [
@@ -592,6 +642,20 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
         equalTo: divider.bottomAnchor, constant: RiverLayout.resultsTopInset),
       scrollView.bottomAnchor.constraint(
         equalTo: surface.bottomAnchor, constant: -RiverLayout.resultsBottomInset),
+    ]
+    mainSurfaceBottomConstraint = surface.bottomAnchor.constraint(
+      equalTo: root.bottomAnchor,
+      constant: -RiverLayout.glowInset
+    )
+    statusVerticalConstraints = [
+      statusSurface.topAnchor.constraint(
+        equalTo: surface.bottomAnchor,
+        constant: RiverLayout.statusGap
+      ),
+      statusSurface.bottomAnchor.constraint(
+        equalTo: root.bottomAnchor,
+        constant: -RiverLayout.glowInset
+      ),
     ]
 
     NSLayoutConstraint.activate([
@@ -602,10 +666,20 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
         constant: -RiverLayout.glowInset
       ),
       surface.topAnchor.constraint(equalTo: root.topAnchor, constant: RiverLayout.glowInset),
-      surface.bottomAnchor.constraint(
-        equalTo: root.bottomAnchor,
-        constant: -RiverLayout.glowInset
+      mainSurfaceBottomConstraint,
+      statusSurface.leadingAnchor.constraint(equalTo: surface.leadingAnchor),
+      statusSurface.trailingAnchor.constraint(equalTo: surface.trailingAnchor),
+      statusSurface.heightAnchor.constraint(equalToConstant: RiverLayout.statusSurfaceHeight),
+      statusStack.leadingAnchor.constraint(
+        equalTo: statusSurface.leadingAnchor,
+        constant: RiverLayout.statusHorizontalPadding
       ),
+      statusStack.trailingAnchor.constraint(
+        equalTo: statusSurface.trailingAnchor,
+        constant: -RiverLayout.statusHorizontalPadding
+      ),
+      statusStack.topAnchor.constraint(equalTo: statusSurface.topAnchor),
+      statusStack.bottomAnchor.constraint(equalTo: statusSurface.bottomAnchor),
       input.leadingAnchor.constraint(
         equalTo: surface.leadingAnchor, constant: RiverLayout.inputPadding),
       input.trailingAnchor.constraint(
@@ -963,10 +1037,49 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     divider.isHidden = !visible
   }
 
+  private func setStatusPlugins(_ snapshots: [StatusPluginSnapshot]) {
+    guard snapshots != statusSnapshots else { return }
+    let wasVisible = !statusSnapshots.isEmpty
+    statusSnapshots = snapshots
+
+    for view in statusStack.arrangedSubviews {
+      statusStack.removeArrangedSubview(view)
+      view.removeFromSuperview()
+    }
+    for snapshot in snapshots {
+      let label = NSTextField(labelWithString: snapshot.displayText)
+      label.font = .systemFont(ofSize: 14.5, weight: .semibold)
+      label.textColor = NSColor.white.withAlphaComponent(snapshot.output == nil ? 0.42 : 0.78)
+      label.alignment = .center
+      label.lineBreakMode = .byTruncatingTail
+      label.maximumNumberOfLines = 1
+      label.toolTip = snapshot.output
+      statusStack.addArrangedSubview(label)
+    }
+
+    let isVisible = !snapshots.isEmpty
+    if isVisible != wasVisible {
+      if isVisible {
+        mainSurfaceBottomConstraint.isActive = false
+        NSLayoutConstraint.activate(statusVerticalConstraints)
+      } else {
+        NSLayoutConstraint.deactivate(statusVerticalConstraints)
+        mainSurfaceBottomConstraint.isActive = true
+      }
+      statusSurface.isHidden = !isVisible
+      resize(for: rows.count)
+    } else if isVisible {
+      panel.contentView?.layoutSubtreeIfNeeded()
+      if panel.isVisible { panel.displayIfNeeded() }
+    }
+  }
+
   private func resize(for rowCount: Int, display: Bool = true) {
     let oldTop = panel.frame.maxY
     let surfaceHeight = RiverLayout.surfaceHeight(for: rowCount)
-    let height = surfaceHeight + RiverLayout.glowInset * 2
+    let statusHeight = statusSnapshots.isEmpty
+      ? 0 : RiverLayout.statusGap + RiverLayout.statusSurfaceHeight
+    let height = surfaceHeight + statusHeight + RiverLayout.glowInset * 2
     var frame = panel.frame
     frame.size.height = height
     frame.origin.y = oldTop - height

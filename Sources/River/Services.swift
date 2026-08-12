@@ -811,7 +811,8 @@ final class PluginRunner {
     let path = Paths.expand(directory)
     let names = (try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []
     return names.filter { name in
-      !name.hasPrefix(".") && FileManager.default.isExecutableFile(atPath: path + "/" + name)
+      name.range(of: "^[A-Za-z0-9_-]+$", options: .regularExpression) != nil
+        && FileManager.default.isExecutableFile(atPath: path + "/" + name)
     }.sorted()
   }
 

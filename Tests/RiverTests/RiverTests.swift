@@ -457,6 +457,87 @@ final class RiverTests: XCTestCase {
     wait(for: [finished], timeout: 7)
   }
 
+  func testStatusPluginFilenamesParseRefreshIntervals() {
+    XCTAssertEqual(
+      StatusPluginDescriptor(filename: "weather.10m.zsh", directory: "/plugins")?.interval,
+      10 * 60
+    )
+    XCTAssertEqual(
+      StatusPluginDescriptor(filename: "010-watts.5s", directory: "/plugins")?.displayName,
+      "watts"
+    )
+    XCTAssertEqual(
+      StatusPluginDescriptor(filename: "uv.2h.sh", directory: "/plugins")?.path,
+      "/plugins/uv.2h.sh"
+    )
+    XCTAssertNil(StatusPluginDescriptor(filename: "weather.zsh", directory: "/plugins"))
+    XCTAssertNil(StatusPluginDescriptor(filename: "weather.1s.zsh", directory: "/plugins"))
+    XCTAssertNil(StatusPluginDescriptor(filename: "weather.8d.zsh", directory: "/plugins"))
+  }
+
+  func testStatusPluginOutputUsesFirstNonemptyLineAndBoundsInput() {
+    XCTAssertEqual(
+      StatusPluginOutput.firstLine(from: Data("\n  Weather 18°C  \nTomorrow\n".utf8)),
+      "Weather 18°C"
+    )
+    XCTAssertNil(StatusPluginOutput.firstLine(from: Data(" \n\t\n".utf8)))
+    let oversized = Data((String(repeating: "x", count: StatusPluginOutput.maximumBytes + 100)).utf8)
+    XCTAssertEqual(
+      StatusPluginOutput.firstLine(from: oversized)?.utf8.count,
+      StatusPluginOutput.maximumBytes
+    )
+  }
+
+  func testStatusPluginsRunInBackgroundAndPublishCachedOutput() throws {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("river-status-plugin-test-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let pluginURL = directory.appendingPathComponent("weather.5s.sh")
+    try "#!/bin/sh\nprintf '\\n18°C\\nignored\\n'\n".write(
+      to: pluginURL, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: pluginURL.path)
+
+    var config = AppConfig()
+    config.pluginDirectory = directory.path
+    config.pluginTimeoutMilliseconds = 1_000
+    let manager = StatusPluginManager(
+      cachePath: directory.appendingPathComponent("cache/status.json").path)
+    let refreshed = expectation(description: "status plugin refreshed")
+    manager.onChange = { snapshots in
+      if snapshots.first?.output == "18°C" { refreshed.fulfill() }
+    }
+    manager.start(config: config)
+    defer { manager.stop() }
+
+    XCTAssertEqual(manager.snapshots.first?.displayText, "weather …")
+    wait(for: [refreshed], timeout: 3)
+    XCTAssertEqual(manager.snapshots.first?.displayText, "18°C")
+
+    manager.stop()
+    let reloaded = StatusPluginManager(
+      cachePath: directory.appendingPathComponent("cache/status.json").path)
+    reloaded.start(config: config)
+    XCTAssertEqual(reloaded.snapshots.first?.displayText, "18°C")
+    reloaded.stop()
+  }
+
+  func testScheduledPluginIsNotAnInteractiveSlashCommand() throws {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("river-status-plugin-catalog-test-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    for name in ["weather", "weather.10m.zsh"] {
+      let url = directory.appendingPathComponent(name)
+      try "#!/bin/sh\n".write(to: url, atomically: true, encoding: .utf8)
+      try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+    }
+
+    XCTAssertEqual(PluginRunner().availablePlugins(in: directory.path), ["weather"])
+  }
+
   func testVerbosePluginOutputDoesNotBlockTheProcess() throws {
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent("river-verbose-plugin-test-\(UUID().uuidString)")

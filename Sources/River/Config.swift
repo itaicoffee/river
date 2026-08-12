@@ -144,6 +144,11 @@ enum Paths {
         .appendingPathComponent("knowledge.json").path
   }
 
+  static var statusPluginCacheFile: String {
+    ProcessInfo.processInfo.environment["RIVER_STATUS_PLUGIN_CACHE"]
+      ?? expand("~/.cache/river/status-plugins.json")
+  }
+
   static var installedBinary: String {
     expand("~/.local/bin/river")
   }

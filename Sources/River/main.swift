@@ -4,15 +4,18 @@ import Foundation
 final class AppDelegate: NSObject, NSApplicationDelegate {
   private let configStore = ConfigStore()
   private let hotKey = GlobalHotKey()
+  private let statusPlugins = StatusPluginManager()
   private var launcher: LauncherController?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
-    let launcher = LauncherController(configStore: configStore)
+    statusPlugins.start(config: configStore.value)
+    let launcher = LauncherController(configStore: configStore, statusPlugins: statusPlugins)
     self.launcher = launcher
 
     registerHotKey(configStore.value.hotkey)
     configStore.onChange = { [weak self] config in
       self?.registerHotKey(config.hotkey)
+      self?.statusPlugins.update(config: config)
     }
     configStore.startWatching()
   }

@@ -141,8 +141,9 @@ chmod +x ~/.config/river/plugins/hello
 ```
 
 Typing `/hello friend` now displays `hello friend`. The installer seeds `uv`, `weather`, and `watts`
-the same way and never overwrites a plugin you edit. UV and weather call `wttr.in`, which infers
-location from your public IP. Watts reads the power-adapter information published by macOS.
+the same way and never overwrites a plugin you edit. Weather and UV use macOS Core Location and
+Open-Meteo for your current coordinates, while watts reads the power-adapter information published
+by macOS. The installer also schedules these three plugins for the status rectangle by default.
 
 ### Status plugins
 
@@ -155,9 +156,10 @@ watts.10s.zsh
 uv.15m.zsh
 ```
 
-River runs these scripts continuously in the background and shows their cached output in a separate
-status rectangle below the launcher. Opening River only reads the cache, so even network-backed
-values appear immediately. Intervals use `s`, `m`, `h`, or `d`, have a five-second minimum, and may
+River runs these scripts continuously in the background and shows their cached output as individual
+rows in a fixed rectangle at the active display's top-left. Opening River only reads the cache, so
+even network-backed values appear immediately. Intervals use `s`, `m`, `h`, or `d`, have a
+five-second minimum, and may
 appear before an optional file extension. Numeric prefixes such as `010-weather.10m.zsh` control
 display order without becoming part of the placeholder name.
 

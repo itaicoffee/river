@@ -348,6 +348,48 @@ final class RiverTests: XCTestCase {
     XCTAssertNil(Installer.runningPID(in: "state = waiting\n"))
   }
 
+  func testInstallerSeedsScheduledStatusPlugins() {
+    XCTAssertEqual(
+      Installer.defaultStatusPluginNames,
+      ["010-weather.10m.zsh", "020-uv.15m.zsh", "030-watts.10s.zsh"]
+    )
+    XCTAssertEqual(
+      Installer.defaultStatusPluginNames.compactMap {
+        StatusPluginDescriptor(filename: $0, directory: "/plugins")?.displayName
+      },
+      ["weather", "uv", "watts"]
+    )
+  }
+
+  func testBundledWeatherUsesDynamicRiverCoordinatesInsteadOfIPGeolocation() {
+    XCTAssertTrue(Installer.weatherPlugin.contains("RIVER_LATITUDE"))
+    XCTAssertTrue(Installer.weatherPlugin.contains("RIVER_LONGITUDE"))
+    XCTAssertFalse(Installer.weatherPlugin.contains("latitude=45.82&longitude=13.84"))
+    XCTAssertTrue(Installer.weatherPlugin.contains("api.open-meteo.com"))
+    XCTAssertFalse(Installer.weatherPlugin.contains("wttr.in"))
+    XCTAssertTrue(Installer.legacyWeatherPlugin.contains("wttr.in"))
+  }
+
+  func testBundledUVUsesDynamicRiverCoordinatesInsteadOfIPGeolocation() {
+    XCTAssertTrue(Installer.uvPlugin.contains("RIVER_LATITUDE"))
+    XCTAssertTrue(Installer.uvPlugin.contains("RIVER_LONGITUDE"))
+    XCTAssertFalse(Installer.uvPlugin.contains("latitude=45.82&longitude=13.84"))
+    XCTAssertTrue(Installer.uvPlugin.contains("current=uv_index"))
+    XCTAssertTrue(Installer.uvPlugin.contains("api.open-meteo.com"))
+    XCTAssertFalse(Installer.uvPlugin.contains("wttr.in"))
+    XCTAssertTrue(Installer.legacyUVPlugin.contains("wttr.in"))
+  }
+
+  func testRiverLocationFormatsPluginEnvironmentAndMovementThreshold() {
+    let original = RiverLocation(latitude: 45.82345, longitude: 13.84456, updatedAt: .distantPast)
+    XCTAssertEqual(original.pluginEnvironment["RIVER_LATITUDE"], "45.823450")
+    XCTAssertEqual(original.pluginEnvironment["RIVER_LONGITUDE"], "13.844560")
+    XCTAssertTrue(original.isNear(
+      RiverLocation(latitude: 45.8239, longitude: 13.8449, updatedAt: .distantFuture)))
+    XCTAssertFalse(original.isNear(
+      RiverLocation(latitude: 45.9, longitude: 13.9, updatedAt: .distantFuture)))
+  }
+
   func testApplicationCatalogMatchesExactlyIgnoringCase() {
     let catalog = ApplicationCatalog(applicationURLs: [
       URL(fileURLWithPath: "/Applications/Codex.app"),

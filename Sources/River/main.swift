@@ -5,11 +5,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private let configStore = ConfigStore()
   private let hotKey = GlobalHotKey()
   private let statusPlugins = StatusPluginManager()
+  private let locationProvider = RiverLocationProvider()
   private var launcher: LauncherController?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
-    statusPlugins.start(config: configStore.value)
-    let launcher = LauncherController(configStore: configStore, statusPlugins: statusPlugins)
+    locationProvider.onChange = { [weak self] location in
+      self?.statusPlugins.update(location: location)
+    }
+    statusPlugins.start(config: configStore.value, location: locationProvider.currentLocation)
+    let launcher = LauncherController(
+      configStore: configStore,
+      statusPlugins: statusPlugins,
+      locationProvider: locationProvider
+    )
     self.launcher = launcher
 
     registerHotKey(configStore.value.hotkey)
@@ -18,6 +26,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       self?.statusPlugins.update(config: config)
     }
     configStore.startWatching()
+  }
+
+  func applicationDidBecomeActive(_ notification: Notification) {
+    locationProvider.refresh()
   }
 
   private func registerHotKey(_ text: String) {

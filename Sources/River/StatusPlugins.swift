@@ -97,13 +97,17 @@ struct StatusPluginExecutionResult: Equatable {
 enum StatusPluginProcessRunner {
   static func run(
     _ descriptor: StatusPluginDescriptor,
-    timeoutMilliseconds: Int
+    timeoutMilliseconds: Int,
+    environment: [String: String] = [:]
   ) -> StatusPluginExecutionResult {
     let process = Process()
     let stdout = Pipe()
     let stderr = Pipe()
     process.executableURL = URL(fileURLWithPath: descriptor.path)
     process.currentDirectoryURL = URL(fileURLWithPath: descriptor.path).deletingLastPathComponent()
+    process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, updated in
+      updated
+    }
     process.standardOutput = stdout
     process.standardError = stderr
 
@@ -205,6 +209,7 @@ final class StatusPluginManager {
     let token = UUID()
     var nextRun: Date
     var isRunning = false
+    var runImmediatelyAfterCompletion = false
 
     init(descriptor: StatusPluginDescriptor, nextRun: Date) {
       self.descriptor = descriptor
@@ -224,6 +229,7 @@ final class StatusPluginManager {
   private let cachePath: String
   private var timer: DispatchSourceTimer?
   private var config = AppConfig()
+  private var location: RiverLocation?
   private var runtimes: [String: Runtime] = [:]
   private var cache: [String: CacheEntry] = [:]
   private var publishedSnapshots: [StatusPluginSnapshot] = []
@@ -241,10 +247,11 @@ final class StatusPluginManager {
     return publishedSnapshots
   }
 
-  func start(config: AppConfig) {
+  func start(config: AppConfig, location: RiverLocation? = nil) {
     queue.sync {
       guard timer == nil else { return }
       self.config = config
+      self.location = location
       cache = Self.loadCache(at: cachePath)
       reconcilePlugins(now: Date())
       publishIfNeeded()
@@ -268,6 +275,24 @@ final class StatusPluginManager {
       }
       self.reconcilePlugins(now: Date())
       self.publishIfNeeded()
+    }
+  }
+
+  func update(location: RiverLocation) {
+    queue.async { [weak self] in
+      guard let self else { return }
+      let changed = self.location.map { !$0.isNear(location) } ?? true
+      self.location = location
+      guard changed else { return }
+
+      for runtime in self.runtimes.values where Self.usesLocation(runtime.descriptor) {
+        if runtime.isRunning {
+          runtime.runImmediatelyAfterCompletion = true
+        } else {
+          runtime.nextRun = .distantPast
+        }
+      }
+      self.runDuePlugins(now: Date())
     }
   }
 
@@ -329,9 +354,13 @@ final class StatusPluginManager {
       let descriptor = runtime.descriptor
       let token = runtime.token
       let timeout = config.pluginTimeoutMilliseconds
+      let environment = location?.pluginEnvironment ?? [:]
       workerQueue.addOperation { [weak self] in
         let result = StatusPluginProcessRunner.run(
-          descriptor, timeoutMilliseconds: timeout)
+          descriptor,
+          timeoutMilliseconds: timeout,
+          environment: environment
+        )
         self?.queue.async { [weak self] in
           self?.complete(path: descriptor.path, token: token, result: result)
         }
@@ -346,7 +375,12 @@ final class StatusPluginManager {
   ) {
     guard let runtime = runtimes[path], runtime.token == token else { return }
     runtime.isRunning = false
-    runtime.nextRun = Date().addingTimeInterval(runtime.descriptor.interval)
+    if runtime.runImmediatelyAfterCompletion {
+      runtime.runImmediatelyAfterCompletion = false
+      runtime.nextRun = .distantPast
+    } else {
+      runtime.nextRun = Date().addingTimeInterval(runtime.descriptor.interval)
+    }
 
     if let output = result.output {
       cache[path] = CacheEntry(output: output, updatedAt: Date())
@@ -355,6 +389,12 @@ final class StatusPluginManager {
     } else if let error = result.error {
       fputs("river: status plugin '\(runtime.descriptor.filename)' \(error)\n", stderr)
     }
+    runDuePlugins(now: Date())
+  }
+
+  private static func usesLocation(_ descriptor: StatusPluginDescriptor) -> Bool {
+    let name = descriptor.displayName.lowercased()
+    return name.contains("weather") || name == "uv" || name.contains("ultraviolet")
   }
 
   private func publishIfNeeded() {

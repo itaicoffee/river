@@ -149,6 +149,11 @@ enum Paths {
       ?? expand("~/.cache/river/status-plugins.json")
   }
 
+  static var locationCacheFile: String {
+    ProcessInfo.processInfo.environment["RIVER_LOCATION_CACHE"]
+      ?? expand("~/.cache/river/location.json")
+  }
+
   static var installedBinary: String {
     expand("~/.local/bin/river")
   }

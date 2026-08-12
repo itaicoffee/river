@@ -12,10 +12,18 @@ let package = Package(
     .executableTarget(
       name: "River",
       path: "Sources/River",
+      exclude: ["Info.plist"],
       linkerSettings: [
         .linkedFramework("AppKit"),
         .linkedFramework("Carbon"),
+        .linkedFramework("CoreLocation"),
         .linkedFramework("CoreServices"),
+        .unsafeFlags([
+          "-Xlinker", "-sectcreate",
+          "-Xlinker", "__TEXT",
+          "-Xlinker", "__info_plist",
+          "-Xlinker", "Sources/River/Info.plist",
+        ]),
       ]
     ),
     .testTarget(name: "RiverTests", dependencies: ["River"], path: "Tests/RiverTests"),

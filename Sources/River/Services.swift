@@ -931,7 +931,12 @@ final class PluginRunner {
     }
   }
 
-  func run(_ request: PluginRequest, config: AppConfig, completion: @escaping (String) -> Void) {
+  func run(
+    _ request: PluginRequest,
+    config: AppConfig,
+    environment: [String: String] = [:],
+    completion: @escaping (String) -> Void
+  ) {
     let requestedGeneration = beginRequest()
 
     queue.asyncAfter(deadline: .now() + 0.06) { [weak self] in
@@ -950,6 +955,9 @@ final class PluginRunner {
       let stderr = Pipe()
       process.executableURL = URL(fileURLWithPath: executable)
       process.arguments = request.arguments
+      process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, updated in
+        updated
+      }
       process.standardOutput = stdout
       process.standardError = stderr
 

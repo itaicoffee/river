@@ -103,7 +103,19 @@ enum Installer {
 
     for (name, contents) in defaultPlugins {
       let url = pluginDirectory.appendingPathComponent(name)
-      guard !FileManager.default.fileExists(atPath: url.path) else { continue }
+      if FileManager.default.fileExists(atPath: url.path) {
+        let existing = try? String(contentsOf: url, encoding: .utf8)
+        let shouldMigrate =
+          (name == "weather"
+            && (existing == legacyWeatherPlugin || existing == pinnedWeatherPlugin))
+          || (name == "uv" && (existing == legacyUVPlugin || existing == pinnedUVPlugin))
+        if shouldMigrate {
+          try contents.write(to: url, atomically: true, encoding: .utf8)
+          try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: url.path)
+        }
+        continue
+      }
       try contents.write(to: url, atomically: true, encoding: .utf8)
       try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
     }
@@ -213,18 +225,13 @@ enum Installer {
     return process.terminationStatus
   }
 
-  private static let defaultPlugins: [String: String] = [
-    "uv": """
-    #!/bin/zsh
-    value=$(/usr/bin/curl -fsS --max-time 5 'https://wttr.in/?format=%u' 2>/dev/null)
-    value=${value//$'\\n'/}
-    if [[ "$value" == <-> ]]; then
-      print "UV $value"
-    else
-      print "UV unavailable"
-    fi
-    """,
-    "weather": """
+  static let defaultStatusPluginNames = [
+    "010-weather.10m.zsh",
+    "020-uv.15m.zsh",
+    "030-watts.10s.zsh",
+  ]
+
+  static let legacyWeatherPlugin = """
     #!/bin/zsh
     value=$(/usr/bin/curl -fsS --max-time 5 'https://wttr.in/?format=%t&m' 2>/dev/null)
     value=${value//$'\\n'/}
@@ -233,7 +240,86 @@ enum Installer {
     else
       print "Weather unavailable"
     fi
-    """,
+    """
+
+  static let pinnedWeatherPlugin = """
+    #!/bin/zsh
+    payload=$(/usr/bin/curl -fsS --max-time 5 \\
+      'https://api.open-meteo.com/v1/forecast?latitude=45.82&longitude=13.84&current=temperature_2m&timezone=Europe%2FLjubljana' \\
+      2>/dev/null)
+    temperature=$(print -r -- "$payload" | /usr/bin/sed -nE \\
+      's/.*"temperature_2m":(-?[0-9]+(\\.[0-9]+)?).*/\\1/p')
+    if [[ -n "$temperature" ]]; then
+      LC_NUMERIC=C /usr/bin/printf '%.0f°C\\n' "$temperature"
+    else
+      print "Weather unavailable"
+    fi
+    """
+
+  static let weatherPlugin = """
+    #!/bin/zsh
+    if [[ -z "$RIVER_LATITUDE" || -z "$RIVER_LONGITUDE" ]]; then
+      print "Weather unavailable"
+      exit 0
+    fi
+    payload=$(/usr/bin/curl -fsS --max-time 5 \\
+      "https://api.open-meteo.com/v1/forecast?latitude=${RIVER_LATITUDE}&longitude=${RIVER_LONGITUDE}&current=temperature_2m&timezone=auto" \\
+      2>/dev/null)
+    temperature=$(print -r -- "$payload" | /usr/bin/sed -nE \\
+      's/.*"temperature_2m":(-?[0-9]+(\\.[0-9]+)?).*/\\1/p')
+    if [[ -n "$temperature" ]]; then
+      LC_NUMERIC=C /usr/bin/printf '%.0f°C\\n' "$temperature"
+    else
+      print "Weather unavailable"
+    fi
+    """
+
+  static let legacyUVPlugin = """
+    #!/bin/zsh
+    value=$(/usr/bin/curl -fsS --max-time 5 'https://wttr.in/?format=%u' 2>/dev/null)
+    value=${value//$'\\n'/}
+    if [[ "$value" == <-> ]]; then
+      print "UV $value"
+    else
+      print "UV unavailable"
+    fi
+    """
+
+  static let pinnedUVPlugin = """
+    #!/bin/zsh
+    payload=$(/usr/bin/curl -fsS --max-time 5 \\
+      'https://api.open-meteo.com/v1/forecast?latitude=45.82&longitude=13.84&current=uv_index&timezone=Europe%2FRome' \\
+      2>/dev/null)
+    uv=$(print -r -- "$payload" | /usr/bin/sed -nE \\
+      's/.*"uv_index":(-?[0-9]+(\\.[0-9]+)?).*/\\1/p')
+    if [[ -n "$uv" ]]; then
+      LC_NUMERIC=C /usr/bin/printf 'UV %.1f\\n' "$uv"
+    else
+      print "UV unavailable"
+    fi
+    """
+
+  static let uvPlugin = """
+    #!/bin/zsh
+    if [[ -z "$RIVER_LATITUDE" || -z "$RIVER_LONGITUDE" ]]; then
+      print "UV unavailable"
+      exit 0
+    fi
+    payload=$(/usr/bin/curl -fsS --max-time 5 \\
+      "https://api.open-meteo.com/v1/forecast?latitude=${RIVER_LATITUDE}&longitude=${RIVER_LONGITUDE}&current=uv_index&timezone=auto" \\
+      2>/dev/null)
+    uv=$(print -r -- "$payload" | /usr/bin/sed -nE \\
+      's/.*"uv_index":(-?[0-9]+(\\.[0-9]+)?).*/\\1/p')
+    if [[ -n "$uv" ]]; then
+      LC_NUMERIC=C /usr/bin/printf 'UV %.1f\\n' "$uv"
+    else
+      print "UV unavailable"
+    fi
+    """
+
+  private static let defaultPlugins: [String: String] = [
+    "uv": uvPlugin,
+    "weather": weatherPlugin,
     "watts": """
     #!/bin/zsh
     power=$(/usr/sbin/system_profiler SPPowerDataType 2>/dev/null)
@@ -246,6 +332,18 @@ enum Installer {
     else
       print "No charger"
     fi
+    """,
+    "010-weather.10m.zsh": """
+    #!/bin/zsh
+    exec "${0:A:h}/weather"
+    """,
+    "020-uv.15m.zsh": """
+    #!/bin/zsh
+    exec "${0:A:h}/uv"
+    """,
+    "030-watts.10s.zsh": """
+    #!/bin/zsh
+    exec "${0:A:h}/watts"
     """,
   ]
 }

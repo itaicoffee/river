@@ -311,6 +311,8 @@ enum Installer {
     "010-weather.10m.zsh",
     "020-uv.15m.zsh",
     "030-watts.10s.zsh",
+    "040-wifi.30s.zsh",
+    "050-speedtest.30s.zsh",
   ]
 
   static let legacyWeatherPlugin = """
@@ -399,6 +401,88 @@ enum Installer {
     fi
     """
 
+  static let wifiPlugin = """
+    #!/bin/zsh
+    interface=$(/usr/sbin/networksetup -listallhardwareports 2>/dev/null | /usr/bin/awk '/Wi-Fi|AirPort/{getline; print $2; exit}')
+    ssid=$(/usr/sbin/networksetup -getairportnetwork "$interface" 2>/dev/null | /usr/bin/sed -nE 's/^Current Wi-Fi Network: (.*)/\\1/p')
+    if [[ -z "$ssid" ]]; then
+      print "WiFi off"
+      exit 0
+    fi
+    signal=$(/usr/sbin/system_profiler SPAirPortDataType 2>/dev/null | /usr/bin/awk -F': ' 'index($0, "Signal / Noise:") { print $2; exit }' | /usr/bin/awk '{print $1}')
+    if [[ -n "$signal" ]]; then
+      print "WiFi ${ssid} ${signal}dBm"
+    else
+      print "WiFi ${ssid}"
+    fi
+    """
+
+  static let speedtestPlugin = """
+    #!/bin/zsh
+    dir="${0:A:h}"
+    cache="$dir/.speedtest"
+    pidfile="$dir/.speedtest.pid"
+    interface=$(/usr/sbin/networksetup -listallhardwareports 2>/dev/null | /usr/bin/awk '/Wi-Fi|AirPort/{getline; print $2; exit}')
+    ssid=$(/usr/sbin/networksetup -getairportnetwork "$interface" 2>/dev/null | /usr/bin/sed -nE 's/^Current Wi-Fi Network: (.*)/\\1/p')
+    now=$(/bin/date +%s)
+    cached_ssid=
+    cached_ts=0
+    cached_down=
+    cached_up=
+    if [[ -f "$cache" ]]; then
+      while read -r key value; do
+        case "$key" in
+          ssid) cached_ssid=$value ;;
+          ts) cached_ts=$value ;;
+          down) cached_down=$value ;;
+          up) cached_up=$value ;;
+        esac
+      done < "$cache"
+    fi
+    fresh=0
+    if [[ -n "$cached_ssid" && "$cached_ssid" == "$ssid" && -n "$cached_down" ]]; then
+      age=$(( now - cached_ts ))
+      if (( age >= 0 && age < 600 )); then
+        fresh=1
+      fi
+    fi
+    if (( fresh )); then
+      LC_NUMERIC=C /usr/bin/printf 'Speed ↓%.1f ↑%.1f Mbps\\n' "$cached_down" "$cached_up"
+      exit 0
+    fi
+    if [[ -n "$cached_down" ]]; then
+      LC_NUMERIC=C /usr/bin/printf 'Speed ↓%.1f ↑%.1f Mbps (…)\\n' "$cached_down" "$cached_up"
+    else
+      print "Speed measuring…"
+    fi
+    if [[ -z "$ssid" ]]; then
+      exit 0
+    fi
+    if [[ -f "$pidfile" ]]; then
+      pid=$(/bin/cat "$pidfile" 2>/dev/null)
+      if [[ -n "$pid" ]] && /bin/kill -0 "$pid" 2>/dev/null; then
+        exit 0
+      fi
+      /bin/rm -f "$pidfile"
+    fi
+    (
+      /usr/bin/networkQuality -s > "$dir/.speedtest.out" 2>/dev/null
+      down=$(/usr/bin/awk -F': ' '/Download capacity/{gsub(/ Mbps/,"",$2); print $2}' "$dir/.speedtest.out")
+      up=$(/usr/bin/awk -F': ' '/Upload capacity/{gsub(/ Mbps/,"",$2); print $2}' "$dir/.speedtest.out")
+      if [[ -n "$down" ]]; then
+        {
+          print "ssid $ssid"
+          print "ts $now"
+          print "down $down"
+          print "up ${up:-0}"
+        } > "$dir/.speedtest.tmp"
+        /bin/mv "$dir/.speedtest.tmp" "$cache"
+      fi
+      /bin/rm -f "$pidfile" "$dir/.speedtest.out"
+    ) >/dev/null 2>&1 &!
+    print "$!" > "$pidfile"
+    """
+
   private static let defaultPlugins: [String: String] = [
     "uv": uvPlugin,
     "weather": weatherPlugin,
@@ -427,5 +511,7 @@ enum Installer {
     #!/bin/zsh
     exec "${0:A:h}/watts"
     """,
+    "040-wifi.30s.zsh": wifiPlugin,
+    "050-speedtest.30s.zsh": speedtestPlugin,
   ]
 }

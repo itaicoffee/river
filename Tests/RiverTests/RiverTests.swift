@@ -8,7 +8,6 @@ final class RiverTests: XCTestCase {
       """
       # hello
       hotkey = cmd+space
-      browser = Safari
       max_file_results = 7
       plugin_timeout_ms = 1200
       quicklink.github = https://github.com/search?q={query}
@@ -16,7 +15,6 @@ final class RiverTests: XCTestCase {
       """)
 
     XCTAssertEqual(config.hotkey, "cmd+space")
-    XCTAssertEqual(config.browser, "Safari")
     XCTAssertEqual(config.maxFileResults, 7)
     XCTAssertEqual(config.pluginTimeoutMilliseconds, 1_200)
     XCTAssertEqual(config.searchURL, AppConfig().searchURL)
@@ -261,6 +259,10 @@ final class RiverTests: XCTestCase {
   func testRiverCommandParsing() {
     XCTAssertEqual(RiverCommand(input: "river restart"), .restart)
     XCTAssertEqual(RiverCommand(input: "  RIVER SETTINGS  "), .settings)
+    XCTAssertEqual(RiverCommand(input: "restart"), .restartComputer)
+    XCTAssertEqual(RiverCommand(input: "  SHUT DOWN "), .shutDown)
+    XCTAssertEqual(RiverCommand(input: "shutdown"), .shutDown)
+    XCTAssertEqual(RiverCommand(input: "LOCK"), .lock)
     XCTAssertNil(RiverCommand(input: "river"))
     XCTAssertNil(RiverCommand(input: "river restart now"))
   }
@@ -276,6 +278,9 @@ final class RiverTests: XCTestCase {
     )
 
     XCTAssertTrue(items.contains(where: { $0.replacement == "river settings" }))
+    XCTAssertTrue(items.contains(where: { $0.replacement == "restart" }))
+    XCTAssertTrue(items.contains(where: { $0.replacement == "shut down" }))
+    XCTAssertTrue(items.contains(where: { $0.replacement == "lock" }))
     XCTAssertTrue(items.contains(where: { $0.replacement == "ai " }))
     XCTAssertTrue(items.contains(where: { $0.replacement == "stock " }))
     XCTAssertTrue(items.contains(where: { $0.replacement == "emoji " }))
@@ -317,6 +322,18 @@ final class RiverTests: XCTestCase {
     XCTAssertEqual(arguments.suffix(2), ["--", path])
     XCTAssertFalse(arguments.dropLast(2).contains(where: { $0.contains(path) }))
     XCTAssertTrue(arguments.contains("do script \"nvim \" & quoted form of item 1 of argv"))
+  }
+
+  func testMacSystemActionsUseExpectedSystemEventsCommands() {
+    XCTAssertTrue(MacSystemAction.restart.appleScriptArguments.contains(where: {
+      $0.contains("to restart")
+    }))
+    XCTAssertTrue(MacSystemAction.shutDown.appleScriptArguments.contains(where: {
+      $0.contains("to shut down")
+    }))
+    XCTAssertTrue(MacSystemAction.lock.appleScriptArguments.contains(where: {
+      $0.contains("control down, command down")
+    }))
   }
 
   func testSpotlightQueryTargetsFilenamesAndEscapesInput() {
@@ -367,13 +384,36 @@ final class RiverTests: XCTestCase {
   func testInstallerSeedsScheduledStatusPlugins() {
     XCTAssertEqual(
       Installer.defaultStatusPluginNames,
-      ["010-weather.10m.zsh", "020-uv.15m.zsh", "030-watts.10s.zsh"]
+      [
+        "010-weather.10m.zsh",
+        "020-uv.15m.zsh",
+        "030-watts.10s.zsh",
+        "040-wifi.30s.zsh",
+        "050-speedtest.30s.zsh",
+      ]
     )
     XCTAssertEqual(
       Installer.defaultStatusPluginNames.compactMap {
         StatusPluginDescriptor(filename: $0, directory: "/plugins")?.displayName
       },
-      ["weather", "uv", "watts"]
+      ["weather", "uv", "watts", "wifi", "speedtest"]
+    )
+  }
+
+  func testStatusPluginPresentationUsesLowercaseNamesAndRemovesReadablePrefix() {
+    XCTAssertEqual(
+      StatusPluginPresentation.readableName(for: "Codex_Context"),
+      "codex context"
+    )
+    XCTAssertEqual(
+      StatusPluginPresentation.displayValue(
+        for: StatusPluginSnapshot(
+          id: "codex-context",
+          displayName: "codex-context",
+          output: "codex context · 52% used"
+        )
+      ),
+      "52% used"
     )
   }
 
@@ -522,16 +562,16 @@ final class RiverTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: directory) }
 
     let configURL = directory.appendingPathComponent("config")
-    try "browser = Safari\n".write(to: configURL, atomically: true, encoding: .utf8)
+    try "max_file_results = 3\n".write(to: configURL, atomically: true, encoding: .utf8)
     let store = ConfigStore(path: configURL.path)
-    XCTAssertEqual(store.value.browser, "Safari")
+    XCTAssertEqual(store.value.maxFileResults, 3)
 
     let reloaded = expectation(description: "config reloaded")
     store.onChange = { config in
-      if config.browser == "Google Chrome" { reloaded.fulfill() }
+      if config.maxFileResults == 7 { reloaded.fulfill() }
     }
     store.startWatching()
-    try "browser = Google Chrome\n".write(to: configURL, atomically: true, encoding: .utf8)
+    try "max_file_results = 7\n".write(to: configURL, atomically: true, encoding: .utf8)
 
     wait(for: [reloaded], timeout: 2)
     store.stopWatching()

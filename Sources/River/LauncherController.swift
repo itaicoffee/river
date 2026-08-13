@@ -322,6 +322,33 @@ private final class ResultRowView: NSTableRowView {
   }
 }
 
+enum StatusPluginPresentation {
+  static func readableName(for displayName: String) -> String {
+    displayName
+      .replacingOccurrences(of: "[_-]+", with: " ", options: .regularExpression)
+      .lowercased()
+  }
+
+  static func displayValue(for snapshot: StatusPluginSnapshot) -> String {
+    guard let output = snapshot.output else { return "Updating…" }
+    let candidates = [
+      snapshot.displayName.trimmingCharacters(in: .whitespacesAndNewlines),
+      readableName(for: snapshot.displayName),
+    ]
+
+    for name in candidates.sorted(by: { $0.count > $1.count }) {
+      guard output.count > name.count,
+        output.prefix(name.count).caseInsensitiveCompare(name) == .orderedSame
+      else { continue }
+
+      let remainder = output.dropFirst(name.count)
+        .trimmingCharacters(in: CharacterSet(charactersIn: " :-·"))
+      if !remainder.isEmpty { return remainder }
+    }
+    return output
+  }
+}
+
 private final class StatusPluginRowView: NSView {
   private let iconPlate = NSView()
   private let iconView = NSImageView()
@@ -349,9 +376,7 @@ private final class StatusPluginRowView: NSView {
     iconView.imageScaling = .scaleProportionallyDown
     iconView.translatesAutoresizingMaskIntoConstraints = false
 
-    let readableName = snapshot.displayName
-      .replacingOccurrences(of: "[_-]+", with: " ", options: .regularExpression)
-      .capitalized
+    let readableName = StatusPluginPresentation.readableName(for: snapshot.displayName)
     nameLabel.stringValue = readableName
     nameLabel.font = .systemFont(ofSize: 11.5, weight: .medium)
     nameLabel.textColor = NSColor.white.withAlphaComponent(0.46)
@@ -359,7 +384,7 @@ private final class StatusPluginRowView: NSView {
     nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     nameLabel.translatesAutoresizingMaskIntoConstraints = false
 
-    valueLabel.stringValue = Self.displayValue(for: snapshot)
+    valueLabel.stringValue = StatusPluginPresentation.displayValue(for: snapshot)
     valueLabel.font = .systemFont(ofSize: 13.5, weight: .semibold)
     valueLabel.textColor = NSColor.white.withAlphaComponent(snapshot.output == nil ? 0.38 : 0.90)
     valueLabel.alignment = .right
@@ -417,19 +442,6 @@ private final class StatusPluginRowView: NSView {
       return "chart.line.uptrend.xyaxis"
     }
     return "command"
-  }
-
-  private static func displayValue(for snapshot: StatusPluginSnapshot) -> String {
-    guard let output = snapshot.output else { return "Updating…" }
-    let name = snapshot.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard output.count > name.count,
-      output.prefix(name.count).caseInsensitiveCompare(name) == .orderedSame
-    else {
-      return output
-    }
-    let remainder = output.dropFirst(name.count)
-      .trimmingCharacters(in: CharacterSet(charactersIn: " :-·"))
-    return remainder.isEmpty ? output : remainder
   }
 
   private static func tint(for name: String) -> NSColor {
@@ -937,6 +949,15 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
             action: "Restart"
           )
         ])
+      case .restartComputer:
+        setRows([
+          Row(
+            title: "Restart this Mac",
+            subtitle: "System · Close apps and restart",
+            symbolName: "arrow.clockwise",
+            action: "Restart"
+          )
+        ])
       case .settings:
         setRows([
           Row(
@@ -944,6 +965,24 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
             subtitle: "Terminal · nvim · \(displayPath(configStore.path))",
             symbolName: "slider.horizontal.3",
             action: "Open"
+          )
+        ])
+      case .shutDown:
+        setRows([
+          Row(
+            title: "Shut down this Mac",
+            subtitle: "System · Close apps and power off",
+            symbolName: "power",
+            action: "Shut Down"
+          )
+        ])
+      case .lock:
+        setRows([
+          Row(
+            title: "Lock Screen",
+            subtitle: "System · Require sign-in to continue",
+            symbolName: "lock",
+            action: "Lock"
           )
         ])
       }
@@ -1398,14 +1437,14 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     if let request = ChatGPTRequest(input: text),
       let url = URLBuilder.chatGPTURL(for: request)
     {
-      Browser.openChatGPT(url, application: configStore.value.browser)
+      Browser.openChatGPT(url)
       dismiss()
       return
     }
 
     if let request = StockRequest(input: text) {
       guard let url = StockLookup.quotePageURL(for: request.symbol) else { return }
-      Browser.open(url, application: configStore.value.browser)
+      Browser.open(url)
       dismiss()
       return
     }
@@ -1482,14 +1521,14 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
       lucky.resolve(luckyURL, fallbackURL: fallbackURL) { [weak self] resolvedURL in
         guard let self else { return }
         self.stopLuckyPresentation()
-        Browser.open(resolvedURL, application: self.configStore.value.browser)
+        Browser.open(resolvedURL)
         self.dismiss()
       }
       return
     }
 
     if let url = URLBuilder.webURL(for: text) {
-      Browser.open(url, application: configStore.value.browser)
+      Browser.open(url)
       dismiss()
       return
     }
@@ -1497,7 +1536,7 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     guard let url = URLBuilder.searchURL(template: configStore.value.searchURL, query: text) else {
       return
     }
-    Browser.open(url, application: configStore.value.browser)
+    Browser.open(url)
     dismiss()
   }
 
@@ -1522,7 +1561,7 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     switch destination {
     case .url(let url):
       if url.scheme == "http" || url.scheme == "https" {
-        Browser.open(url, application: configStore.value.browser)
+        Browser.open(url)
       } else {
         NSWorkspace.shared.open(url)
       }
@@ -1585,6 +1624,8 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     case .restart:
       dismiss()
       exit(EXIT_SUCCESS)
+    case .restartComputer:
+      perform(MacSystemAction.restart)
     case .settings:
       do {
         try TerminalEditor.openInNvim(path: configStore.path)
@@ -1598,6 +1639,25 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
           )
         ])
       }
+    case .shutDown:
+      perform(MacSystemAction.shutDown)
+    case .lock:
+      perform(MacSystemAction.lock)
+    }
+  }
+
+  private func perform(_ action: MacSystemAction) {
+    do {
+      try action.perform()
+      dismiss()
+    } catch {
+      setRows([
+        Row(
+          title: "Could not perform system action",
+          subtitle: error.localizedDescription,
+          symbolName: "exclamationmark.triangle"
+        )
+      ])
     }
   }
 

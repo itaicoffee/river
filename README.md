@@ -54,6 +54,9 @@ To update, run the one-line installer again. Your configuration and plugins are 
 | `/weather`, `/uv`, `/watts` | Runs one of River's bundled example plugins |
 | `river settings` | Opens the live config in Terminal with `nvim` |
 | `river restart` | Restarts the background launcher |
+| `restart` | Restarts the Mac |
+| `shut down` | Shuts down the Mac |
+| `lock` | Locks the screen |
 
 Use the arrow keys to choose a result, Return to open it, and Escape to close River. Clicking
 elsewhere also hides it.
@@ -83,7 +86,6 @@ River creates `~/.config/river/config` on first install and applies changes with
 
 ```ini
 hotkey = ctrl+f
-browser = Google Chrome
 search_url = https://www.google.com/search?q={query}
 lucky_url = https://www.google.com/search?btnI=1&q={query}
 plugin_dir = ~/.config/river/plugins
@@ -94,7 +96,7 @@ max_file_results = 5
 ```
 
 Supported hotkey keys are letters, digits, and `space`; modifiers are `ctrl`, `cmd`, `opt`, and
-`shift`. Set `browser = Safari` (or another installed browser name) if you do not use Chrome.
+`shift`. Web links open in the default browser configured in macOS.
 
 ### Quicklinks
 

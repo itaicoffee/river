@@ -36,12 +36,18 @@ struct FileResult: Equatable {
 
 enum RiverCommand: Equatable {
   case restart
+  case restartComputer
   case settings
+  case shutDown
+  case lock
 
   init?(input: String) {
     switch input.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
     case "river restart": self = .restart
     case "river settings": self = .settings
+    case "restart": self = .restartComputer
+    case "shut down", "shutdown": self = .shutDown
+    case "lock": self = .lock
     default: return nil
     }
   }
@@ -77,6 +83,30 @@ enum CommandCenterCatalog {
         symbolName: "arrow.clockwise",
         action: "Restart",
         replacement: "river restart",
+        submitsImmediately: true
+      ),
+      CommandCenterItem(
+        title: "Restart Mac",
+        subtitle: "System · Restart this Mac",
+        symbolName: "arrow.clockwise",
+        action: "Restart",
+        replacement: "restart",
+        submitsImmediately: true
+      ),
+      CommandCenterItem(
+        title: "Shut Down Mac",
+        subtitle: "System · Shut down this Mac",
+        symbolName: "power",
+        action: "Shut Down",
+        replacement: "shut down",
+        submitsImmediately: true
+      ),
+      CommandCenterItem(
+        title: "Lock Screen",
+        subtitle: "System · Lock this Mac",
+        symbolName: "lock",
+        action: "Lock",
+        replacement: "lock",
         submitsImmediately: true
       ),
       CommandCenterItem(
@@ -1310,19 +1340,16 @@ final class LuckyResolver {
 }
 
 enum Browser {
-  static func open(_ url: URL, application: String) {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-    process.arguments = ["-a", application, url.absoluteString]
-    do {
-      try process.run()
-    } catch {
-      NSWorkspace.shared.open(url)
-    }
+  static func open(_ url: URL) {
+    NSWorkspace.shared.open(url)
   }
 
-  static func openChatGPT(_ url: URL, application: String) {
-    open(url, application: application)
+  static func openChatGPT(_ url: URL) {
+    let application = NSWorkspace.shared.urlForApplication(toOpen: url)?
+      .deletingPathExtension().lastPathComponent
+    open(url)
+
+    guard let application else { return }
 
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
@@ -1343,6 +1370,33 @@ enum Browser {
       "-e", "end run",
       "--", application,
     ]
+  }
+}
+
+enum MacSystemAction: Equatable {
+  case restart
+  case shutDown
+  case lock
+
+  var appleScriptArguments: [String] {
+    switch self {
+    case .restart:
+      return ["-e", "tell application \"System Events\" to restart"]
+    case .shutDown:
+      return ["-e", "tell application \"System Events\" to shut down"]
+    case .lock:
+      return [
+        "-e",
+        "tell application \"System Events\" to keystroke \"q\" using {control down, command down}",
+      ]
+    }
+  }
+
+  func perform() throws {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+    process.arguments = appleScriptArguments
+    try process.run()
   }
 }
 

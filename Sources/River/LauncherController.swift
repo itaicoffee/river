@@ -349,6 +349,15 @@ enum StatusPluginPresentation {
   }
 }
 
+enum LauncherKeyAction {
+  static func shouldRevealFile(modifierFlags: NSEvent.ModifierFlags) -> Bool {
+    modifierFlags
+      .intersection(.deviceIndependentFlagsMask)
+      .subtracting(.capsLock)
+      .contains(.shift)
+  }
+}
+
 private final class StatusPluginRowView: NSView {
   private let iconPlate = NSView()
   private let iconView = NSImageView()
@@ -628,7 +637,11 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
   {
     switch commandSelector {
     case #selector(NSResponder.insertNewline(_:)):
-      submit()
+      submit(
+        revealFileInFinder: LauncherKeyAction.shouldRevealFile(
+          modifierFlags: NSApp.currentEvent?.modifierFlags ?? []
+        )
+      )
       return true
     case #selector(NSResponder.cancelOperation(_:)):
       if isControlC(NSApp.currentEvent) {
@@ -1404,7 +1417,7 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     table.scrollRowToVisible(selectedIndex)
   }
 
-  private func submit() {
+  private func submit(revealFileInFinder: Bool = false) {
     let rawInput = input.stringValue
     let text = rawInput.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !text.isEmpty else { return }
@@ -1459,7 +1472,12 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
       if case .file(let file)? = rows[selectedIndex].target {
         knowledge.record(
           query: String(text.dropFirst()), itemIdentifier: file.knowledgeIdentifier)
-        NSWorkspace.shared.open(URL(fileURLWithPath: file.path))
+        let url = URL(fileURLWithPath: file.path)
+        if revealFileInFinder {
+          NSWorkspace.shared.activateFileViewerSelecting([url])
+        } else {
+          NSWorkspace.shared.open(url)
+        }
         dismiss()
         return
       }

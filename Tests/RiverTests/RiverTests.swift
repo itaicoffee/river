@@ -417,6 +417,13 @@ final class RiverTests: XCTestCase {
     )
   }
 
+  func testShiftModifierRevealsFileInFinder() {
+    XCTAssertTrue(LauncherKeyAction.shouldRevealFile(modifierFlags: [.shift]))
+    XCTAssertTrue(LauncherKeyAction.shouldRevealFile(modifierFlags: [.shift, .capsLock]))
+    XCTAssertFalse(LauncherKeyAction.shouldRevealFile(modifierFlags: []))
+    XCTAssertFalse(LauncherKeyAction.shouldRevealFile(modifierFlags: [.command]))
+  }
+
   func testInstallerRunsFromAnIdentifiedAppBundleForLocationPermission() {
     XCTAssertEqual(
       Installer.launchAgentPropertyList["ProgramArguments"] as? [String],

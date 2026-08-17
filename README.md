@@ -37,7 +37,7 @@ To update, run the one-line installer again. Your configuration and plugins are 
 | --- | --- |
 | Exact app name + Return | Opens the app (case-insensitive) |
 | Fuzzy app name + arrows + Return | Opens the selected matching app |
-| `'filename` | Shows Spotlight file matches; Return opens one |
+| `'filename` | Shows Spotlight file matches; Return opens one, Shift-Return reveals it in Finder |
 | `2 + 3 * 4` | Shows the answer live; Return copies it |
 | `15% of 80` | Calculates percentages |
 | `10 km in mi` | Converts common units |

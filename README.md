@@ -37,7 +37,7 @@ To update, run the one-line installer again. Your configuration and plugins are 
 | --- | --- |
 | Exact app name + Return | Opens the app (case-insensitive) |
 | Fuzzy app name + arrows + Return | Opens the selected matching app |
-| `'filename` | Shows Spotlight file matches; Return opens one, Shift-Return reveals it in Finder |
+| `'filename` | Fuzzy-searches indexed files and folders; Return opens one, Shift-Return reveals it in Finder |
 | `2 + 3 * 4` | Shows the answer live; Return copies it |
 | `15% of 80` | Calculates percentages |
 | `10 km in mi` | Converts common units |
@@ -70,10 +70,11 @@ River is a small Swift executable built directly on AppKit, Carbon, and Core Ser
 2. Carbon registers the global hotkey. Pressing it shows a native `NSPanel` and focuses its text
    field.
 3. As you type, River resolves local actions in priority order: commands, calculations, Quicklinks,
-   applications, Spotlight files, definitions, and plugins. A remaining query becomes a browser
+   applications, indexed files, definitions, and plugins. A remaining query becomes a browser
    search when you press Return.
-4. App and file choices are ranked locally. River remembers recent selections for four weeks so
-   repeated queries put the result you actually use first.
+4. File search uses a persisted local index with fuzzy basename and path-token matching, then merges
+   any available Spotlight candidates. River remembers recent selections for four weeks so repeated
+   queries put the result you actually use first.
 5. Configuration is polled and reloaded live. Plugins are discovered from their directory each time
    they are needed. Scheduled status plugins refresh independently and publish cached output, so
    opening River never waits for a script or network request.
@@ -196,6 +197,8 @@ river install    Install and start this build
 river restart    Restart the installed LaunchAgent
 river uninstall  Remove the binary and LaunchAgent
 river config     Print the active config path
+river search-diagnose code
+                 Print local file-search results and elapsed time
 ```
 
 `river uninstall` keeps your config, learned rankings, and plugins. Remove `~/.config/river` yourself

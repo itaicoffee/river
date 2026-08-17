@@ -764,7 +764,7 @@ final class ApplicationCatalog {
   }
 }
 
-final class SpotlightSearch {
+final class SpotlightSearch: FileSearchProviding {
   private let queue = DispatchQueue(label: "river.spotlight", qos: .userInitiated)
   private let stateLock = NSLock()
   private var generation = 0

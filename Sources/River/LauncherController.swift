@@ -50,8 +50,8 @@ private final class GlowView: NSView {
     super.init(frame: frameRect)
     wantsLayer = true
     gradient.colors = [
-      NSColor(calibratedRed: 0.075, green: 0.090, blue: 0.125, alpha: 0.98).cgColor,
-      NSColor(calibratedRed: 0.025, green: 0.032, blue: 0.050, alpha: 0.98).cgColor,
+      NSColor(calibratedRed: 0.075, green: 0.090, blue: 0.125, alpha: 1).cgColor,
+      NSColor(calibratedRed: 0.025, green: 0.032, blue: 0.050, alpha: 1).cgColor,
     ]
     gradient.startPoint = CGPoint(x: 0.08, y: 1)
     gradient.endPoint = CGPoint(x: 0.92, y: 0)
@@ -160,10 +160,10 @@ private enum RiverLayout {
   static let cornerRadius: CGFloat = 18
   static let statusCornerRadius: CGFloat = 14
   static let statusGlowInset: CGFloat = 32
-  static let statusSurfaceWidth: CGFloat = 252
+  static let statusSurfaceWidth: CGFloat = 296
   static let statusRowHeight: CGFloat = 40
   static let statusVerticalPadding: CGFloat = 9
-  static let statusHorizontalPadding: CGFloat = 12
+  static let statusHorizontalPadding: CGFloat = 14
   static let statusScreenMargin: CGFloat = 16
   static let maximumVisibleRows = 5
 
@@ -347,6 +347,30 @@ enum StatusPluginPresentation {
     }
     return output
   }
+
+  static func symbolName(for snapshot: StatusPluginSnapshot) -> String {
+    let name = snapshot.displayName.lowercased()
+    let output = snapshot.output?.lowercased() ?? ""
+
+    if name.contains("date") || name.contains("calendar") { return "calendar" }
+    if name.contains("weather") { return "sun.max.fill" }
+    if name == "uv" || name.contains("ultraviolet") {
+      return "sun.max.trianglebadge.exclamationmark.fill"
+    }
+    if name.contains("watt") || name.contains("power") { return "bolt.fill" }
+    if name.contains("wifi") || name.contains("network") { return "wifi" }
+    if name.contains("speed") { return "gauge.with.dots.needle.67percent" }
+    if name.contains("location") { return "location.fill" }
+    if name.contains("battery") { return "battery.75percent" }
+    if name.contains("gmail") || name.contains("mail") { return "envelope.fill" }
+    if name.contains("codex") && name.contains("context") { return "brain.head.profile" }
+    if name.contains("codex") && name.contains("session") { return "clock.fill" }
+    if name.contains("codex") && name.contains("week") { return "calendar.badge.clock" }
+    if name.contains("stock") || name.contains("market") || output.contains("$") {
+      return "chart.line.uptrend.xyaxis"
+    }
+    return "circle.fill"
+  }
 }
 
 enum LauncherKeyAction {
@@ -368,9 +392,9 @@ private final class StatusPluginRowView: NSView {
   init(snapshot: StatusPluginSnapshot, showsDivider: Bool) {
     super.init(frame: .zero)
 
-    let tint = Self.tint(for: snapshot.displayName)
+    let tint = Self.tint(for: snapshot)
     iconPlate.wantsLayer = true
-    iconPlate.layer?.cornerRadius = 7
+    iconPlate.layer?.cornerRadius = 8
     if #available(macOS 10.15, *) { iconPlate.layer?.cornerCurve = .continuous }
     iconPlate.layer?.backgroundColor = tint.withAlphaComponent(0.13).cgColor
     iconPlate.layer?.borderWidth = 0.5
@@ -378,7 +402,7 @@ private final class StatusPluginRowView: NSView {
     iconPlate.translatesAutoresizingMaskIntoConstraints = false
 
     iconView.image = NSImage(
-      systemSymbolName: Self.symbolName(for: snapshot.displayName),
+      systemSymbolName: StatusPluginPresentation.symbolName(for: snapshot),
       accessibilityDescription: nil
     ) ?? NSImage(systemSymbolName: "circle.fill", accessibilityDescription: nil)
     iconView.contentTintColor = tint.withAlphaComponent(0.92)
@@ -387,15 +411,15 @@ private final class StatusPluginRowView: NSView {
 
     let readableName = StatusPluginPresentation.readableName(for: snapshot.displayName)
     nameLabel.stringValue = readableName
-    nameLabel.font = .systemFont(ofSize: 11.5, weight: .medium)
-    nameLabel.textColor = NSColor.white.withAlphaComponent(0.46)
+    nameLabel.font = .systemFont(ofSize: 11.5, weight: .semibold)
+    nameLabel.textColor = NSColor.white.withAlphaComponent(0.62)
     nameLabel.lineBreakMode = .byTruncatingTail
     nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     nameLabel.translatesAutoresizingMaskIntoConstraints = false
 
     valueLabel.stringValue = StatusPluginPresentation.displayValue(for: snapshot)
     valueLabel.font = .systemFont(ofSize: 13.5, weight: .semibold)
-    valueLabel.textColor = NSColor.white.withAlphaComponent(snapshot.output == nil ? 0.38 : 0.90)
+    valueLabel.textColor = NSColor.white.withAlphaComponent(snapshot.output == nil ? 0.42 : 0.94)
     valueLabel.alignment = .right
     valueLabel.lineBreakMode = .byTruncatingTail
     valueLabel.setContentHuggingPriority(.required, for: .horizontal)
@@ -417,15 +441,15 @@ private final class StatusPluginRowView: NSView {
       heightAnchor.constraint(equalToConstant: RiverLayout.statusRowHeight),
       iconPlate.leadingAnchor.constraint(equalTo: leadingAnchor),
       iconPlate.centerYAnchor.constraint(equalTo: centerYAnchor),
-      iconPlate.widthAnchor.constraint(equalToConstant: 24),
-      iconPlate.heightAnchor.constraint(equalToConstant: 24),
+      iconPlate.widthAnchor.constraint(equalToConstant: 26),
+      iconPlate.heightAnchor.constraint(equalToConstant: 26),
       iconView.centerXAnchor.constraint(equalTo: iconPlate.centerXAnchor),
       iconView.centerYAnchor.constraint(equalTo: iconPlate.centerYAnchor),
-      iconView.widthAnchor.constraint(equalToConstant: 13),
-      iconView.heightAnchor.constraint(equalToConstant: 13),
+      iconView.widthAnchor.constraint(equalToConstant: 14),
+      iconView.heightAnchor.constraint(equalToConstant: 14),
       nameLabel.leadingAnchor.constraint(equalTo: iconPlate.trailingAnchor, constant: 10),
       nameLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-      valueLabel.leadingAnchor.constraint(greaterThanOrEqualTo: nameLabel.trailingAnchor, constant: 12),
+      valueLabel.leadingAnchor.constraint(greaterThanOrEqualTo: nameLabel.trailingAnchor, constant: 10),
       valueLabel.trailingAnchor.constraint(equalTo: trailingAnchor),
       valueLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
       divider.leadingAnchor.constraint(equalTo: nameLabel.leadingAnchor),
@@ -440,21 +464,12 @@ private final class StatusPluginRowView: NSView {
 
   required init?(coder: NSCoder) { nil }
 
-  private static func symbolName(for name: String) -> String {
-    let normalized = name.lowercased()
-    if normalized.contains("weather") { return "sun.max.fill" }
-    if normalized == "uv" || normalized.contains("ultraviolet") {
-      return "sun.max.trianglebadge.exclamationmark.fill"
+  private static func tint(for snapshot: StatusPluginSnapshot) -> NSColor {
+    let normalized = snapshot.displayName.lowercased()
+    let output = snapshot.output?.lowercased() ?? ""
+    if output.contains("authentication") || output.contains("error") {
+      return NSColor(calibratedRed: 1.00, green: 0.42, blue: 0.38, alpha: 1)
     }
-    if normalized.contains("watt") || normalized.contains("power") { return "bolt.fill" }
-    if normalized.contains("stock") || normalized.contains("market") {
-      return "chart.line.uptrend.xyaxis"
-    }
-    return "command"
-  }
-
-  private static func tint(for name: String) -> NSColor {
-    let normalized = name.lowercased()
     if normalized.contains("weather") {
       return NSColor(calibratedRed: 1.00, green: 0.67, blue: 0.24, alpha: 1)
     }
@@ -466,6 +481,18 @@ private final class StatusPluginRowView: NSView {
     }
     if normalized.contains("stock") || normalized.contains("market") {
       return NSColor(calibratedRed: 0.32, green: 0.78, blue: 0.96, alpha: 1)
+    }
+    if normalized.contains("location") {
+      return NSColor(calibratedRed: 0.39, green: 0.78, blue: 1.00, alpha: 1)
+    }
+    if normalized.contains("battery") {
+      return NSColor(calibratedRed: 0.39, green: 0.86, blue: 0.57, alpha: 1)
+    }
+    if normalized.contains("gmail") || normalized.contains("mail") {
+      return NSColor(calibratedRed: 0.96, green: 0.48, blue: 0.42, alpha: 1)
+    }
+    if normalized.contains("codex") {
+      return NSColor(calibratedRed: 0.72, green: 0.57, blue: 1.00, alpha: 1)
     }
     return NSColor(calibratedRed: 0.38, green: 0.72, blue: 1.00, alpha: 1)
   }
@@ -510,7 +537,7 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
   private let configStore: ConfigStore
   private let statusPlugins: StatusPluginManager
   private let locationProvider: RiverLocationProvider
-  private let spotlight = SpotlightSearch()
+  private let fileSearch = FileSearchEngine()
   private let plugins = PluginRunner()
   private let lucky = LuckyResolver()
   private let stocks = StockLookup()
@@ -612,7 +639,7 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
   }
 
   func dismiss() {
-    spotlight.cancel()
+    fileSearch.cancel()
     plugins.cancel()
     lucky.cancel()
     stocks.cancel()
@@ -929,7 +956,7 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
   }
 
   private func refresh(for rawInput: String) {
-    spotlight.cancel()
+    fileSearch.cancel()
     plugins.cancel()
     lucky.cancel()
     stocks.cancel()
@@ -1008,12 +1035,12 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     }
 
     if text.hasPrefix("'") {
-      let query = String(text.dropFirst())
+      let query = String(text.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines)
       guard !query.isEmpty else {
         setRows([
           Row(
             title: "Type a filename",
-            subtitle: "Spotlight searches this Mac",
+            subtitle: "Fuzzy-search files and folders on this Mac",
             symbolName: "doc.text.magnifyingglass"
           )
         ])
@@ -1021,14 +1048,14 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
       }
       setRows([Row(title: "Searching…", symbolName: "magnifyingglass")])
       let resultLimit = configStore.value.maxFileResults
-      let candidateLimit = max(50, resultLimit * 10)
-      spotlight.search(query, limit: candidateLimit) { [weak self] results in
+      let preferredIdentifiers = knowledge.rankedItemIdentifiers(for: query)
+      fileSearch.search(
+        query,
+        limit: resultLimit,
+        preferredIdentifiers: preferredIdentifiers
+      ) { [weak self] results, isFinal in
         guard let self else { return }
-        let learnedOrder = self.knowledge.ordered(
-          results, for: query, itemIdentifier: \.knowledgeIdentifier)
-        let ordered = FileResult.directoriesFirst(learnedOrder)
-        let visibleResults = ordered.prefix(resultLimit)
-        let rows = visibleResults.map {
+        let rows = results.map {
           Row(
             title: $0.title,
             subtitle: $0.subtitle,
@@ -1039,7 +1066,12 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
         }
         self.setRows(
           rows.isEmpty
-            ? [Row(title: "No files found", symbolName: "doc.text.magnifyingglass")] : rows,
+            ? [
+              Row(
+                title: isFinal ? "No files found" : "Searching…",
+                symbolName: isFinal ? "doc.text.magnifyingglass" : "magnifyingglass"
+              )
+            ] : rows,
           selectFirst: !rows.isEmpty
         )
       }

@@ -117,6 +117,8 @@ enum Installer {
           (name == "weather"
             && (existing == legacyWeatherPlugin || existing == pinnedWeatherPlugin))
           || (name == "uv" && (existing == legacyUVPlugin || existing == pinnedUVPlugin))
+          || (name == "040-wifi.30s.zsh" && existing == legacyWifiPlugin)
+          || (name == "050-speedtest.30s.zsh" && existing == legacySpeedtestPlugin)
         if shouldMigrate {
           try contents.write(to: url, atomically: true, encoding: .utf8)
           try FileManager.default.setAttributes(
@@ -401,7 +403,7 @@ enum Installer {
     fi
     """
 
-  static let wifiPlugin = """
+  static let legacyWifiPlugin = """
     #!/bin/zsh
     interface=$(/usr/sbin/networksetup -listallhardwareports 2>/dev/null | /usr/bin/awk '/Wi-Fi|AirPort/{getline; print $2; exit}')
     ssid=$(/usr/sbin/networksetup -getairportnetwork "$interface" 2>/dev/null | /usr/bin/sed -nE 's/^Current Wi-Fi Network: (.*)/\\1/p')
@@ -417,7 +419,30 @@ enum Installer {
     fi
     """
 
-  static let speedtestPlugin = """
+  static let wifiPlugin = """
+    #!/bin/zsh
+    profile=$(/usr/sbin/system_profiler SPAirPortDataType 2>/dev/null)
+    interface=$(/usr/sbin/networksetup -listallhardwareports 2>/dev/null | /usr/bin/awk '/Wi-Fi|AirPort/{getline; print $2; exit}')
+    if [[ -z "$interface" ]]; then
+      interface=$(print -r -- "$profile" | /usr/bin/awk '/^[[:space:]]+en[0-9]+:$/ {gsub(/[[:space:]:]/, ""); print; exit}')
+    fi
+    summary=$(/usr/sbin/ipconfig getsummary "$interface" 2>/dev/null)
+    if ! print -r -- "$summary" | /usr/bin/grep -q 'LinkStatusActive : TRUE' \\
+      && ! print -r -- "$profile" | /usr/bin/grep -q 'Status: Connected'; then
+      print "WiFi off"
+      exit 0
+    fi
+    ssid=$(/usr/sbin/networksetup -getairportnetwork "$interface" 2>/dev/null | /usr/bin/sed -nE 's/^Current Wi-Fi Network: (.*)/\\1/p')
+    signal=$(print -r -- "$profile" | /usr/bin/awk -F': ' 'index($0, "Signal / Noise:") { print $2; exit }' | /usr/bin/awk '{print $1}')
+    label=${ssid:-connected}
+    if [[ -n "$signal" ]]; then
+      print "WiFi ${label} ${signal}dBm"
+    else
+      print "WiFi ${label}"
+    fi
+    """
+
+  static let legacySpeedtestPlugin = """
     #!/bin/zsh
     dir="${0:A:h}"
     cache="$dir/.speedtest"
@@ -472,6 +497,84 @@ enum Installer {
       if [[ -n "$down" ]]; then
         {
           print "ssid $ssid"
+          print "ts $now"
+          print "down $down"
+          print "up ${up:-0}"
+        } > "$dir/.speedtest.tmp"
+        /bin/mv "$dir/.speedtest.tmp" "$cache"
+      fi
+      /bin/rm -f "$pidfile" "$dir/.speedtest.out"
+    ) >/dev/null 2>&1 &!
+    print "$!" > "$pidfile"
+    """
+
+  static let speedtestPlugin = """
+    #!/bin/zsh
+    dir="${0:A:h}"
+    cache="$dir/.speedtest"
+    pidfile="$dir/.speedtest.pid"
+    interface=$(/usr/sbin/networksetup -listallhardwareports 2>/dev/null | /usr/bin/awk '/Wi-Fi|AirPort/{getline; print $2; exit}')
+    if [[ -z "$interface" ]]; then
+      interface=$(/usr/sbin/scutil --nwi 2>/dev/null | /usr/bin/awk '/^[[:space:]]+en[0-9]+[[:space:]]+:/ {print $1; exit}')
+    fi
+    summary=$(/usr/sbin/ipconfig getsummary "$interface" 2>/dev/null)
+    link=$(/sbin/ifconfig "$interface" 2>/dev/null)
+    connected=0
+    if print -r -- "$summary" | /usr/bin/grep -q 'LinkStatusActive : TRUE' \\
+      || print -r -- "$link" | /usr/bin/grep -q 'status: active'; then
+      connected=1
+    fi
+    ssid=$(/usr/sbin/networksetup -getairportnetwork "$interface" 2>/dev/null | /usr/bin/sed -nE 's/^Current Wi-Fi Network: (.*)/\\1/p')
+    network=${ssid:-$interface}
+    now=$(/bin/date +%s)
+    cached_network=
+    cached_ts=0
+    cached_down=
+    cached_up=
+    if [[ -f "$cache" ]]; then
+      while read -r key value; do
+        case "$key" in
+          network|ssid) cached_network=$value ;;
+          ts) cached_ts=$value ;;
+          down) cached_down=$value ;;
+          up) cached_up=$value ;;
+        esac
+      done < "$cache"
+    fi
+    fresh=0
+    if (( connected )) && [[ -n "$cached_network" && "$cached_network" == "$network" && -n "$cached_down" ]]; then
+      age=$(( now - cached_ts ))
+      if (( age >= 0 && age < 600 )); then
+        fresh=1
+      fi
+    fi
+    if (( fresh )); then
+      LC_NUMERIC=C /usr/bin/printf 'Speed ↓%.1f ↑%.1f Mbps\\n' "$cached_down" "$cached_up"
+      exit 0
+    fi
+    if (( ! connected )); then
+      print "Speed offline"
+      exit 0
+    fi
+    if [[ -n "$cached_down" ]]; then
+      LC_NUMERIC=C /usr/bin/printf 'Speed ↓%.1f ↑%.1f Mbps (…)\\n' "$cached_down" "$cached_up"
+    else
+      print "Speed measuring…"
+    fi
+    if [[ -f "$pidfile" ]]; then
+      pid=$(/bin/cat "$pidfile" 2>/dev/null)
+      if [[ -n "$pid" ]] && /bin/kill -0 "$pid" 2>/dev/null; then
+        exit 0
+      fi
+      /bin/rm -f "$pidfile"
+    fi
+    (
+      /usr/bin/networkQuality -s -M 20 > "$dir/.speedtest.out" 2>/dev/null
+      down=$(/usr/bin/awk -F': ' '/(Download|Downlink) capacity/{gsub(/ Mbps/,"",$2); print $2; exit}' "$dir/.speedtest.out")
+      up=$(/usr/bin/awk -F': ' '/(Upload|Uplink) capacity/{gsub(/ Mbps/,"",$2); print $2; exit}' "$dir/.speedtest.out")
+      if [[ -n "$down" ]]; then
+        {
+          print "network $network"
           print "ts $now"
           print "down $down"
           print "up ${up:-0}"

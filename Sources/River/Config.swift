@@ -141,6 +141,11 @@ enum Paths {
         .appendingPathComponent("knowledge.json").path
   }
 
+  static var fileSearchIndexFile: String {
+    ProcessInfo.processInfo.environment["RIVER_FILE_SEARCH_INDEX"]
+      ?? expand("~/.cache/river/file-search-index.plist")
+  }
+
   static var statusPluginCacheFile: String {
     ProcessInfo.processInfo.environment["RIVER_STATUS_PLUGIN_CACHE"]
       ?? expand("~/.cache/river/status-plugins.json")

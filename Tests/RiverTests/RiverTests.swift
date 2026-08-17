@@ -361,6 +361,124 @@ final class RiverTests: XCTestCase {
     )
   }
 
+  func testFileSearchRanksExactFolderAheadOfLooseMatches() {
+    let results = [
+      FileResult(path: "/Users/test/Documents/codec", isDirectory: false),
+      FileResult(path: "/Users/test/Documents/code-archive", isDirectory: true),
+      FileResult(path: "/Users/test/Documents/code", isDirectory: true),
+      FileResult(path: "/Users/test/Documents/Xcode", isDirectory: true),
+    ]
+
+    XCTAssertEqual(
+      FileSearchRanker.rank(results, query: "code", limit: 4).map(\.path),
+      [
+        "/Users/test/Documents/code",
+        "/Users/test/Documents/code-archive",
+        "/Users/test/Documents/codec",
+        "/Users/test/Documents/Xcode",
+      ]
+    )
+  }
+
+  func testFileSearchSupportsTyposAndPathTokens() {
+    let code = FileResult(path: "/Users/test/Documents/code", isDirectory: true)
+    let services = FileResult(
+      path: "/Users/test/Documents/code/prompt/Sources/River/Services.swift",
+      isDirectory: false
+    )
+    let unrelated = FileResult(path: "/Users/test/Downloads/movie.mov", isDirectory: false)
+
+    let catalog = FileSearchCatalog(
+      [unrelated, code, services].map(FileSearchRanker.PreparedResult.init)
+    )
+
+    XCTAssertEqual(catalog.search("cdoe", limit: 5).first?.path, code.path)
+    XCTAssertEqual(catalog.search("doc serv", limit: 5).first?.path, services.path)
+    XCTAssertEqual(catalog.search("serv sw", limit: 5).first?.path, services.path)
+  }
+
+  func testFileSearchLearningBoostDoesNotOverrideExactBasename() {
+    let exact = FileResult(path: "/Users/test/code", isDirectory: false)
+    let learned = FileResult(path: "/Users/test/code-archive", isDirectory: true)
+
+    XCTAssertEqual(
+      FileSearchRanker.rank(
+        [learned, exact],
+        query: "code",
+        limit: 2,
+        preferredIdentifiers: [learned.knowledgeIdentifier]
+      ).first?.path,
+      exact.path
+    )
+  }
+
+  func testLocalSearchFindsNestedFolderWhenSpotlightHasNoResults() throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("river-local-search-\(UUID().uuidString)", isDirectory: true)
+    let documents = root.appendingPathComponent("Documents", isDirectory: true)
+    let code = documents.appendingPathComponent("code", isDirectory: true)
+    try FileManager.default.createDirectory(at: code, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let local = LocalFileSearch(
+      roots: [root],
+      cacheURL: root.appendingPathComponent("index.plist"),
+      startImmediately: false
+    )
+    let spotlightDisabled = StubFileSearchProvider(results: [])
+    let engine = FileSearchEngine(providers: [local, spotlightDisabled])
+    let finished = expectation(description: "all file search providers finished")
+
+    engine.search("code", limit: 5) { results, isFinal in
+      guard isFinal else { return }
+      XCTAssertEqual(
+        URL(fileURLWithPath: results.first?.path ?? "").standardizedFileURL.path,
+        code.standardizedFileURL.path
+      )
+      finished.fulfill()
+    }
+    wait(for: [finished], timeout: 2)
+  }
+
+  func testLocalSearchCompletesAnAbsolutePath() throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("river-path-search-\(UUID().uuidString)", isDirectory: true)
+    let code = root.appendingPathComponent("code", isDirectory: true)
+    try FileManager.default.createDirectory(at: code, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let local = LocalFileSearch(
+      roots: [root],
+      cacheURL: root.appendingPathComponent("index.plist"),
+      startImmediately: false
+    )
+    let finished = expectation(description: "direct path completed")
+    local.search(root.appendingPathComponent("co").path, limit: 5) { results in
+      XCTAssertEqual(
+        URL(fileURLWithPath: results.first?.path ?? "").standardizedFileURL.path,
+        code.standardizedFileURL.path
+      )
+      finished.fulfill()
+    }
+    wait(for: [finished], timeout: 2)
+  }
+
+  func testFileSearchRanksAUsefulResultInALargeCatalog() {
+    var results = (0..<20_000).map {
+      FileResult(path: "/Users/test/Documents/archive/random-item-\($0).txt", isDirectory: false)
+    }
+    let target = FileResult(path: "/Users/test/Documents/code", isDirectory: true)
+    results.append(target)
+    let prepared = results.map(FileSearchRanker.PreparedResult.init)
+    let catalog = FileSearchCatalog(prepared)
+    let startedAt = Date()
+    let ranked = catalog.search("code", limit: 5)
+    let elapsed = Date().timeIntervalSince(startedAt)
+
+    XCTAssertEqual(ranked.first?.path, target.path)
+    XCTAssertLessThan(elapsed, 0.05, "Prepared search took \(elapsed) seconds")
+  }
+
   func testPathExpansionLeavesAbsolutePathsAlone() {
     XCTAssertEqual(Paths.expand("/tmp/plugins"), "/tmp/plugins")
     XCTAssertTrue(Paths.expand("~/plugins").hasSuffix("/plugins"))
@@ -417,6 +535,22 @@ final class RiverTests: XCTestCase {
     )
   }
 
+  func testStatusPluginPresentationUsesMeaningfulSymbols() {
+    func snapshot(_ name: String, output: String = "ready") -> StatusPluginSnapshot {
+      StatusPluginSnapshot(id: name, displayName: name, output: output)
+    }
+
+    XCTAssertEqual(StatusPluginPresentation.symbolName(for: snapshot("wifi")), "wifi")
+    XCTAssertEqual(
+      StatusPluginPresentation.symbolName(for: snapshot("codex-context")),
+      "brain.head.profile"
+    )
+    XCTAssertEqual(
+      StatusPluginPresentation.symbolName(for: snapshot("aapl", output: "$304 / $4.5T")),
+      "chart.line.uptrend.xyaxis"
+    )
+  }
+
   func testShiftModifierRevealsFileInFinder() {
     XCTAssertTrue(LauncherKeyAction.shouldRevealFile(modifierFlags: [.shift]))
     XCTAssertTrue(LauncherKeyAction.shouldRevealFile(modifierFlags: [.shift, .capsLock]))
@@ -455,6 +589,24 @@ final class RiverTests: XCTestCase {
     XCTAssertTrue(Installer.uvPlugin.contains("api.open-meteo.com"))
     XCTAssertFalse(Installer.uvPlugin.contains("wttr.in"))
     XCTAssertTrue(Installer.legacyUVPlugin.contains("wttr.in"))
+  }
+
+  func testBundledWiFiUsesLinkStateWhenSSIDIsPrivacyProtected() {
+    XCTAssertTrue(Installer.wifiPlugin.contains("LinkStatusActive : TRUE"))
+    XCTAssertTrue(Installer.wifiPlugin.contains("Status: Connected"))
+    XCTAssertTrue(Installer.wifiPlugin.contains("label=${ssid:-connected}"))
+    XCTAssertFalse(Installer.legacyWifiPlugin.contains("LinkStatusActive : TRUE"))
+  }
+
+  func testBundledSpeedtestSupportsCurrentAndLegacyNetworkQualityOutput() {
+    XCTAssertTrue(Installer.speedtestPlugin.contains("(Download|Downlink) capacity"))
+    XCTAssertTrue(Installer.speedtestPlugin.contains("(Upload|Uplink) capacity"))
+    XCTAssertTrue(Installer.speedtestPlugin.contains("LinkStatusActive : TRUE"))
+    XCTAssertTrue(Installer.speedtestPlugin.contains("networkQuality -s -M 20 >"))
+    XCTAssertFalse(Installer.speedtestPlugin.contains(" -I "))
+    XCTAssertFalse(Installer.speedtestPlugin.contains("system_profiler"))
+    XCTAssertTrue(Installer.speedtestPlugin.contains("status: active"))
+    XCTAssertTrue(Installer.legacySpeedtestPlugin.contains("/Download capacity/"))
   }
 
   func testRiverLocationFormatsPluginEnvironmentAndMovementThreshold() {
@@ -733,4 +885,18 @@ final class RiverTests: XCTestCase {
       "https://www.google.com/url?q=https://apple.com/"
     )
   }
+}
+
+private final class StubFileSearchProvider: FileSearchProviding {
+  let results: [FileResult]
+
+  init(results: [FileResult]) {
+    self.results = results
+  }
+
+  func search(_ query: String, limit: Int, completion: @escaping ([FileResult]) -> Void) {
+    completion(Array(results.prefix(limit)))
+  }
+
+  func cancel() {}
 }

@@ -45,13 +45,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 func printUsage() {
   print(
     """
-    usage: river [run|install|restart|uninstall|config]
+    usage: river [run|install|restart|uninstall|config|search-diagnose]
 
       run        run the launcher (default)
       install    install the binary, plugins, and login LaunchAgent
       restart    restart the installed launcher
       uninstall  remove the binary and LaunchAgent; keep config/plugins
       config     print the live-reloaded config path
+      search-diagnose QUERY
+                 print local fuzzy-search results and elapsed time
     """)
 }
 
@@ -75,6 +77,32 @@ case "uninstall":
   }
 case "config":
   print(Paths.configFile)
+case "search-diagnose":
+  let query = CommandLine.arguments.dropFirst(2).joined(separator: " ")
+    .trimmingCharacters(in: .whitespacesAndNewlines)
+  guard !query.isEmpty else {
+    fputs("river: search-diagnose requires a query\n", stderr)
+    exit(2)
+  }
+
+  let search = LocalFileSearch()
+  let startedAt = Date()
+  let deadline = startedAt.addingTimeInterval(5)
+  var results: [FileResult]?
+  search.search(query, limit: 10) { results = $0 }
+  while results == nil, Date() < deadline {
+    RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
+  }
+  search.cancel()
+  guard let results else {
+    fputs("river: local file search timed out\n", stderr)
+    exit(1)
+  }
+  let elapsedMilliseconds = Int(Date().timeIntervalSince(startedAt) * 1_000)
+  print("local search: \(results.count) results in \(elapsedMilliseconds) ms")
+  for (index, result) in results.enumerated() {
+    print("\(index + 1)\t\(result.isDirectory ? "folder" : "file")\t\(result.subtitle)")
+  }
 case "help", "--help", "-h":
   printUsage()
 case "run":

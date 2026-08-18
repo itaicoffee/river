@@ -627,8 +627,11 @@ final class ApplicationCatalog {
     let normalizedName: String
   }
 
-  private let applications: [IndexedApplication]
-  private let exactMatches: [String: ApplicationResult]
+  private let lock = NSLock()
+  private var applications: [IndexedApplication]
+  private var exactMatches: [String: ApplicationResult]
+  private var eventStream: FSEventStreamRef?
+  private var refreshWorkItem: DispatchWorkItem?
 
   init(applicationURLs: [URL]? = nil) {
     let urls = applicationURLs ?? Self.discoverApplicationURLs()
@@ -655,10 +658,20 @@ final class ApplicationCatalog {
 
     applications = indexedApplications
     self.exactMatches = exactMatches
+
+    if applicationURLs == nil {
+      startWatchingApplicationDirectories()
+    }
+  }
+
+  deinit {
+    stopWatchingApplicationDirectories()
   }
 
   func exactMatch(named query: String) -> ApplicationResult? {
-    exactMatches[Self.normalized(query)]
+    lock.lock()
+    defer { lock.unlock() }
+    return exactMatches[Self.normalized(query)]
   }
 
   func matches(
@@ -669,8 +682,12 @@ final class ApplicationCatalog {
     let preferredOrder = Dictionary(
       uniqueKeysWithValues: preferredIdentifiers.enumerated().map { ($0.element, $0.offset) })
 
+    lock.lock()
+    let currentApplications = applications
+    lock.unlock()
+
     return
-      applications
+      currentApplications
       .compactMap { application -> (IndexedApplication, Int)? in
         guard
           let score = Self.fuzzyScore(
@@ -700,6 +717,94 @@ final class ApplicationCatalog {
       }
       .prefix(limit)
       .map(\.0.result)
+  }
+
+  private func refresh() {
+    let urls = Self.discoverApplicationURLs()
+    var seenPaths = Set<String>()
+    var indexedApplications: [IndexedApplication] = []
+    var exactMatches: [String: ApplicationResult] = [:]
+    indexedApplications.reserveCapacity(urls.count)
+
+    for url in urls {
+      let standardized = url.standardizedFileURL
+      guard standardized.pathExtension.lowercased() == "app",
+        seenPaths.insert(standardized.path).inserted
+      else { continue }
+
+      let result = ApplicationResult(
+        name: standardized.deletingPathExtension().lastPathComponent, url: standardized
+      )
+      let normalizedName = Self.normalized(result.name)
+      indexedApplications.append(
+        IndexedApplication(result: result, normalizedName: normalizedName)
+      )
+      if exactMatches[normalizedName] == nil { exactMatches[normalizedName] = result }
+    }
+
+    lock.lock()
+    applications = indexedApplications
+    self.exactMatches = exactMatches
+    lock.unlock()
+  }
+
+  private func startWatchingApplicationDirectories() {
+    let paths = [
+      Paths.expand("~/Applications"),
+      "/Applications",
+      "/System/Applications",
+      "/System/Library/CoreServices/Applications",
+    ].compactMap { path -> String? in
+      guard FileManager.default.fileExists(atPath: path) else { return nil }
+      return path
+    }
+
+    guard !paths.isEmpty else { return }
+
+    var context = FSEventStreamContext(
+      version: 0,
+      info: Unmanaged.passUnretained(self).toOpaque(),
+      retain: nil,
+      release: nil,
+      copyDescription: nil
+    )
+
+    let callback: FSEventStreamCallback = { streamRef, clientCallBackInfo, numEvents, eventPaths, eventFlags, eventIds in
+      guard let info = clientCallBackInfo else { return }
+      let catalog = Unmanaged<ApplicationCatalog>.fromOpaque(info).takeUnretainedValue()
+      catalog.scheduleRefresh()
+    }
+
+    eventStream = FSEventStreamCreate(
+      nil,
+      callback,
+      &context,
+      paths as CFArray,
+      UInt64(kFSEventStreamEventIdSinceNow),
+      1.0,
+      UInt32(kFSEventStreamCreateFlagUseCFTypes | kFSEventStreamCreateFlagFileEvents)
+    )
+
+    guard let stream = eventStream else { return }
+    FSEventStreamSetDispatchQueue(stream, DispatchQueue.global(qos: .utility))
+    FSEventStreamStart(stream)
+  }
+
+  private func stopWatchingApplicationDirectories() {
+    guard let stream = eventStream else { return }
+    FSEventStreamStop(stream)
+    FSEventStreamInvalidate(stream)
+    FSEventStreamRelease(stream)
+    eventStream = nil
+  }
+
+  private func scheduleRefresh() {
+    refreshWorkItem?.cancel()
+    let workItem = DispatchWorkItem { [weak self] in
+      self?.refresh()
+    }
+    refreshWorkItem = workItem
+    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.5, execute: workItem)
   }
 
   static func fuzzyScore(query: String, candidate: String) -> Int? {

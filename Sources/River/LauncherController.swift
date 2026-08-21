@@ -382,12 +382,118 @@ enum LauncherKeyAction {
   }
 }
 
+private struct SpeedtestMetrics {
+  let download: Double
+  let upload: Double
+  let isStale: Bool
+  let isMeasuring: Bool
+}
+
+private final class SpeedtestMetricsView: NSView {
+  private let downloadLabel = NSTextField(labelWithString: "")
+  private let uploadLabel = NSTextField(labelWithString: "")
+  private let downloadBar = NSView()
+  private let uploadBar = NSView()
+  private let downloadBarFill = NSView()
+  private let uploadBarFill = NSView()
+
+  init(metrics: SpeedtestMetrics) {
+    super.init(frame: .zero)
+
+    let textColor = NSColor.white.withAlphaComponent(metrics.isStale ? 0.56 : 0.94)
+    let barColor = NSColor.white.withAlphaComponent(metrics.isStale ? 0.14 : 0.20)
+    let fillColor = NSColor(calibratedRed: 0.38, green: 0.72, blue: 1.00, alpha: metrics.isStale ? 0.48 : 0.82)
+
+    downloadLabel.stringValue = String(format: "↓%.0f", metrics.download)
+    downloadLabel.font = .monospacedDigitSystemFont(ofSize: 13.5, weight: .semibold)
+    downloadLabel.textColor = textColor
+    downloadLabel.alignment = .right
+    downloadLabel.translatesAutoresizingMaskIntoConstraints = false
+
+    uploadLabel.stringValue = String(format: "↑%.0f", metrics.upload)
+    uploadLabel.font = .monospacedDigitSystemFont(ofSize: 13.5, weight: .semibold)
+    uploadLabel.textColor = textColor
+    uploadLabel.alignment = .right
+    uploadLabel.translatesAutoresizingMaskIntoConstraints = false
+
+    downloadBar.wantsLayer = true
+    downloadBar.layer?.backgroundColor = barColor.cgColor
+    downloadBar.layer?.cornerRadius = 2
+    downloadBar.translatesAutoresizingMaskIntoConstraints = false
+
+    uploadBar.wantsLayer = true
+    uploadBar.layer?.backgroundColor = barColor.cgColor
+    uploadBar.layer?.cornerRadius = 2
+    uploadBar.translatesAutoresizingMaskIntoConstraints = false
+
+    downloadBarFill.wantsLayer = true
+    downloadBarFill.layer?.backgroundColor = fillColor.cgColor
+    downloadBarFill.layer?.cornerRadius = 2
+    downloadBarFill.translatesAutoresizingMaskIntoConstraints = false
+
+    uploadBarFill.wantsLayer = true
+    uploadBarFill.layer?.backgroundColor = fillColor.cgColor
+    uploadBarFill.layer?.cornerRadius = 2
+    uploadBarFill.translatesAutoresizingMaskIntoConstraints = false
+
+    let downloadStack = NSStackView(views: [downloadBar, downloadLabel])
+    downloadStack.orientation = .horizontal
+    downloadStack.alignment = .centerY
+    downloadStack.spacing = 6
+    downloadStack.translatesAutoresizingMaskIntoConstraints = false
+
+    let uploadStack = NSStackView(views: [uploadBar, uploadLabel])
+    uploadStack.orientation = .horizontal
+    uploadStack.alignment = .centerY
+    uploadStack.spacing = 6
+    uploadStack.translatesAutoresizingMaskIntoConstraints = false
+
+    let mainStack = NSStackView(views: [downloadStack, uploadStack])
+    mainStack.orientation = .horizontal
+    mainStack.alignment = .centerY
+    mainStack.spacing = 8
+    mainStack.translatesAutoresizingMaskIntoConstraints = false
+
+    addSubview(mainStack)
+    downloadBar.addSubview(downloadBarFill)
+    uploadBar.addSubview(uploadBarFill)
+
+    let maxSpeed = 1000.0
+    let downloadFraction = min(metrics.download / maxSpeed, 1.0)
+    let uploadFraction = min(metrics.upload / maxSpeed, 1.0)
+
+    NSLayoutConstraint.activate([
+      mainStack.leadingAnchor.constraint(equalTo: leadingAnchor),
+      mainStack.trailingAnchor.constraint(equalTo: trailingAnchor),
+      mainStack.topAnchor.constraint(equalTo: topAnchor),
+      mainStack.bottomAnchor.constraint(equalTo: bottomAnchor),
+      downloadBar.widthAnchor.constraint(equalToConstant: 32),
+      downloadBar.heightAnchor.constraint(equalToConstant: 4),
+      uploadBar.widthAnchor.constraint(equalToConstant: 32),
+      uploadBar.heightAnchor.constraint(equalToConstant: 4),
+      downloadLabel.widthAnchor.constraint(equalToConstant: 42),
+      uploadLabel.widthAnchor.constraint(equalToConstant: 42),
+      downloadBarFill.leadingAnchor.constraint(equalTo: downloadBar.leadingAnchor),
+      downloadBarFill.topAnchor.constraint(equalTo: downloadBar.topAnchor),
+      downloadBarFill.bottomAnchor.constraint(equalTo: downloadBar.bottomAnchor),
+      downloadBarFill.widthAnchor.constraint(equalTo: downloadBar.widthAnchor, multiplier: downloadFraction),
+      uploadBarFill.leadingAnchor.constraint(equalTo: uploadBar.leadingAnchor),
+      uploadBarFill.topAnchor.constraint(equalTo: uploadBar.topAnchor),
+      uploadBarFill.bottomAnchor.constraint(equalTo: uploadBar.bottomAnchor),
+      uploadBarFill.widthAnchor.constraint(equalTo: uploadBar.widthAnchor, multiplier: uploadFraction),
+    ])
+  }
+
+  required init?(coder: NSCoder) { nil }
+}
+
 private final class StatusPluginRowView: NSView {
   private let iconPlate = NSView()
   private let iconView = NSImageView()
   private let nameLabel = NSTextField(labelWithString: "")
   private let valueLabel = NSTextField(labelWithString: "")
   private let divider = NSView()
+  private var speedtestMetricsView: SpeedtestMetricsView?
 
   init(snapshot: StatusPluginSnapshot, showsDivider: Bool) {
     super.init(frame: .zero)
@@ -434,8 +540,28 @@ private final class StatusPluginRowView: NSView {
     addSubview(iconPlate)
     iconPlate.addSubview(iconView)
     addSubview(nameLabel)
-    addSubview(valueLabel)
     addSubview(divider)
+
+    if let metrics = Self.parseSpeedtest(snapshot: snapshot) {
+      let metricsView = SpeedtestMetricsView(metrics: metrics)
+      metricsView.translatesAutoresizingMaskIntoConstraints = false
+      addSubview(metricsView)
+      speedtestMetricsView = metricsView
+      valueLabel.isHidden = true
+
+      NSLayoutConstraint.activate([
+        metricsView.leadingAnchor.constraint(greaterThanOrEqualTo: nameLabel.trailingAnchor, constant: 10),
+        metricsView.trailingAnchor.constraint(equalTo: trailingAnchor),
+        metricsView.centerYAnchor.constraint(equalTo: centerYAnchor),
+      ])
+    } else {
+      addSubview(valueLabel)
+      NSLayoutConstraint.activate([
+        valueLabel.leadingAnchor.constraint(greaterThanOrEqualTo: nameLabel.trailingAnchor, constant: 10),
+        valueLabel.trailingAnchor.constraint(equalTo: trailingAnchor),
+        valueLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+      ])
+    }
 
     NSLayoutConstraint.activate([
       heightAnchor.constraint(equalToConstant: RiverLayout.statusRowHeight),
@@ -449,9 +575,6 @@ private final class StatusPluginRowView: NSView {
       iconView.heightAnchor.constraint(equalToConstant: 14),
       nameLabel.leadingAnchor.constraint(equalTo: iconPlate.trailingAnchor, constant: 10),
       nameLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-      valueLabel.leadingAnchor.constraint(greaterThanOrEqualTo: nameLabel.trailingAnchor, constant: 10),
-      valueLabel.trailingAnchor.constraint(equalTo: trailingAnchor),
-      valueLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
       divider.leadingAnchor.constraint(equalTo: nameLabel.leadingAnchor),
       divider.trailingAnchor.constraint(equalTo: trailingAnchor),
       divider.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -463,6 +586,30 @@ private final class StatusPluginRowView: NSView {
   }
 
   required init?(coder: NSCoder) { nil }
+
+  private static func parseSpeedtest(snapshot: StatusPluginSnapshot) -> SpeedtestMetrics? {
+    guard snapshot.displayName.lowercased().contains("speed"),
+          let output = snapshot.output else { return nil }
+    
+    let pattern = "↓([0-9.]+)\\s*↑([0-9.]+)"
+    guard let regex = try? NSRegularExpression(pattern: pattern),
+          let match = regex.firstMatch(in: output, range: NSRange(output.startIndex..., in: output)),
+          match.numberOfRanges == 3,
+          let downloadRange = Range(match.range(at: 1), in: output),
+          let uploadRange = Range(match.range(at: 2), in: output),
+          let download = Double(output[downloadRange]),
+          let upload = Double(output[uploadRange]) else { return nil }
+    
+    let isStale = output.contains("(…)")
+    let isMeasuring = output.contains("measuring")
+    
+    return SpeedtestMetrics(
+      download: download,
+      upload: upload,
+      isStale: isStale,
+      isMeasuring: isMeasuring
+    )
+  }
 
   private static func tint(for snapshot: StatusPluginSnapshot) -> NSColor {
     let normalized = snapshot.displayName.lowercased()

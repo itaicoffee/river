@@ -387,6 +387,30 @@ private struct SpeedtestMetrics {
   let upload: Double
   let isStale: Bool
   let isMeasuring: Bool
+  
+  static func formatThroughput(mbps: Double) -> String {
+    let bytesPerSecond = mbps * 125_000
+    
+    if bytesPerSecond < 1000 {
+      return String(format: "%.0f B/s", bytesPerSecond)
+    } else if bytesPerSecond < 1_000_000 {
+      let kb = bytesPerSecond / 1000
+      if kb < 10 {
+        return String(format: "%.1f KB/s", kb)
+      } else {
+        return String(format: "%.0f KB/s", kb)
+      }
+    } else if bytesPerSecond < 1_000_000_000 {
+      let mb = bytesPerSecond / 1_000_000
+      if mb < 10 {
+        return String(format: "%.1f MB/s", mb)
+      } else {
+        return String(format: "%.0f MB/s", mb)
+      }
+    } else {
+      return String(format: "%.2f GB/s", bytesPerSecond / 1_000_000_000)
+    }
+  }
 }
 
 private final class SpeedtestMetricsView: NSView {
@@ -404,13 +428,13 @@ private final class SpeedtestMetricsView: NSView {
     let barColor = NSColor.white.withAlphaComponent(metrics.isStale ? 0.14 : 0.20)
     let fillColor = NSColor(calibratedRed: 0.38, green: 0.72, blue: 1.00, alpha: metrics.isStale ? 0.48 : 0.82)
 
-    downloadLabel.stringValue = String(format: "↓%.0f", metrics.download)
+    downloadLabel.stringValue = "↓" + SpeedtestMetrics.formatThroughput(mbps: metrics.download)
     downloadLabel.font = .monospacedDigitSystemFont(ofSize: 13.5, weight: .semibold)
     downloadLabel.textColor = textColor
     downloadLabel.alignment = .right
     downloadLabel.translatesAutoresizingMaskIntoConstraints = false
 
-    uploadLabel.stringValue = String(format: "↑%.0f", metrics.upload)
+    uploadLabel.stringValue = "↑" + SpeedtestMetrics.formatThroughput(mbps: metrics.upload)
     uploadLabel.font = .monospacedDigitSystemFont(ofSize: 13.5, weight: .semibold)
     uploadLabel.textColor = textColor
     uploadLabel.alignment = .right
@@ -471,8 +495,8 @@ private final class SpeedtestMetricsView: NSView {
       downloadBar.heightAnchor.constraint(equalToConstant: 4),
       uploadBar.widthAnchor.constraint(equalToConstant: 32),
       uploadBar.heightAnchor.constraint(equalToConstant: 4),
-      downloadLabel.widthAnchor.constraint(equalToConstant: 42),
-      uploadLabel.widthAnchor.constraint(equalToConstant: 42),
+      downloadLabel.widthAnchor.constraint(equalToConstant: 74),
+      uploadLabel.widthAnchor.constraint(equalToConstant: 74),
       downloadBarFill.leadingAnchor.constraint(equalTo: downloadBar.leadingAnchor),
       downloadBarFill.topAnchor.constraint(equalTo: downloadBar.topAnchor),
       downloadBarFill.bottomAnchor.constraint(equalTo: downloadBar.bottomAnchor),

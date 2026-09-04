@@ -807,6 +807,10 @@ final class ApplicationCatalog {
     DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.5, execute: workItem)
   }
 
+  static func nameMatchScore(query: String, candidate: String) -> Int? {
+    fuzzyScore(query: normalized(query), candidate: normalized(candidate))
+  }
+
   static func fuzzyScore(query: String, candidate: String) -> Int? {
     guard !query.isEmpty, !candidate.isEmpty else { return nil }
     if query == candidate { return 10_000 }

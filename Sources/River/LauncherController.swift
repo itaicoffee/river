@@ -752,6 +752,29 @@ private final class StatusPluginRowView: NSView {
   }
 }
 
+enum LauncherCatalogOrdering {
+  static func applicationsFirst(
+    query: String,
+    exactApplication: ApplicationResult?,
+    exactSetting: SystemSettingsResult?,
+    applications: [ApplicationResult],
+    settings: [SystemSettingsResult]
+  ) -> Bool {
+    if exactSetting != nil { return false }
+    if exactApplication != nil { return true }
+
+    let applicationScore = applications.compactMap {
+      ApplicationCatalog.nameMatchScore(query: query, candidate: $0.name)
+    }.max()
+    guard let applicationScore, applicationScore >= 5_000 else { return false }
+
+    let settingNameScore = settings.compactMap {
+      ApplicationCatalog.nameMatchScore(query: query, candidate: $0.name)
+    }.max() ?? Int.min
+    return applicationScore > settingNameScore
+  }
+}
+
 final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
   NSTableViewDataSource, NSTableViewDelegate
 {
@@ -1609,10 +1632,14 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
         target: .systemSetting($0)
       )
     }
-    let orderedRows =
-      exactApplication != nil && exactSetting == nil
-      ? appRows + settingRows
-      : settingRows + appRows
+    let applicationsFirst = LauncherCatalogOrdering.applicationsFirst(
+      query: text,
+      exactApplication: exactApplication,
+      exactSetting: exactSetting,
+      applications: applications,
+      settings: settings
+    )
+    let orderedRows = applicationsFirst ? appRows + settingRows : settingRows + appRows
     let resultRows = Array(orderedRows.prefix(configStore.value.maxFileResults))
     let firstIdentifier: String? = resultRows.first.flatMap { row in
       switch row.target {

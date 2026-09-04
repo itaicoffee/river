@@ -866,6 +866,50 @@ final class RiverTests: XCTestCase {
     )
   }
 
+  func testApplicationNameMatchRanksChromeAheadOfSettingsKeywords() {
+    let chrome = ApplicationResult(
+      name: "Google Chrome",
+      url: URL(fileURLWithPath: "/Applications/Google Chrome.app")
+    )
+    let desktop = SystemSettingsResult(
+      name: "Desktop & Dock",
+      identifier: "com.apple.Desktop-Settings.extension",
+      searchTerms: ["Chrome"]
+    )
+
+    XCTAssertTrue(
+      LauncherCatalogOrdering.applicationsFirst(
+        query: "chrome",
+        exactApplication: nil,
+        exactSetting: nil,
+        applications: [chrome],
+        settings: [desktop]
+      )
+    )
+  }
+
+  func testExactSystemSettingStillRanksAheadOfApplications() {
+    let displayApp = ApplicationResult(
+      name: "Display Manager",
+      url: URL(fileURLWithPath: "/Applications/Display Manager.app")
+    )
+    let displays = SystemSettingsResult(
+      name: "Displays",
+      identifier: "com.apple.Displays-Settings.extension",
+      searchTerms: ["monitor"]
+    )
+
+    XCTAssertFalse(
+      LauncherCatalogOrdering.applicationsFirst(
+        query: "displays",
+        exactApplication: nil,
+        exactSetting: displays,
+        applications: [displayApp],
+        settings: [displays]
+      )
+    )
+  }
+
   func testSystemSettingsCatalogMatchesPaneNamesAndNativeSearchTerms() {
     let displays = SystemSettingsResult(
       name: "Displays",

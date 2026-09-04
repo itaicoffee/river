@@ -8,7 +8,7 @@ struct Quicklink: Equatable {
 }
 
 struct AppConfig: Equatable {
-  var hotkey = "ctrl+f"
+  var hotkey = "cmd+shift+space"
   var searchURL = "https://www.google.com/search?q={query}"
   var luckyURL = "https://www.google.com/search?btnI=1&q={query}"
   var pluginDirectory = "~/.config/river/plugins"
@@ -18,7 +18,7 @@ struct AppConfig: Equatable {
 
   static let defaultText = """
     # River reloads this file automatically. No restart is needed.
-    hotkey = ctrl+f
+    hotkey = cmd+shift+space
     search_url = https://www.google.com/search?q={query}
     lucky_url = https://www.google.com/search?btnI=1&q={query}
     plugin_dir = ~/.config/river/plugins

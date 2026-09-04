@@ -1,4 +1,5 @@
 import CoreLocation
+import CoreWLAN
 import Foundation
 
 struct RiverLocation: Codable, Equatable {
@@ -8,10 +9,14 @@ struct RiverLocation: Codable, Equatable {
 
   var pluginEnvironment: [String: String] {
     let locale = Locale(identifier: "en_US_POSIX")
-    return [
+    var environment = [
       "RIVER_LATITUDE": String(format: "%.6f", locale: locale, latitude),
       "RIVER_LONGITUDE": String(format: "%.6f", locale: locale, longitude),
     ]
+    if let ssid = CWWiFiClient.shared().interface()?.ssid(), !ssid.isEmpty {
+      environment["RIVER_WIFI_SSID"] = ssid
+    }
+    return environment
   }
 
   func isNear(_ other: RiverLocation) -> Bool {

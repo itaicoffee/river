@@ -153,6 +153,7 @@ private enum RiverLayout {
   static let inputAreaHeight: CGFloat = 78
   static let inputPadding: CGFloat = 24
   static let rowHeight: CGFloat = 58
+  static let dictionaryRowHeight: CGFloat = 96
   static let resultsTopInset: CGFloat = 8
   static let resultsBottomInset: CGFloat = 10
   static let resultsClipAllowance: CGFloat = 1
@@ -174,11 +175,11 @@ private enum RiverLayout {
     statusVerticalPadding * 2 + CGFloat(rowCount) * statusRowHeight
   }
 
-  static func surfaceHeight(for rowCount: Int) -> CGFloat {
-    guard rowCount > 0 else { return inputAreaHeight }
-    let visibleRows = min(rowCount, maximumVisibleRows)
+  static func surfaceHeight(for rowHeights: [CGFloat]) -> CGFloat {
+    guard !rowHeights.isEmpty else { return inputAreaHeight }
+    let visibleHeight = rowHeights.prefix(maximumVisibleRows).reduce(0, +)
     return inputAreaHeight + dividerHeight + resultsTopInset + resultsBottomInset
-      + CGFloat(visibleRows) * rowHeight + resultsClipAllowance
+      + visibleHeight + resultsClipAllowance
   }
 }
 
@@ -249,9 +250,14 @@ private final class ResultCellView: NSTableCellView {
     subtitle: String?,
     icon: NSImage?,
     emoji: String? = nil,
-    action: String?
+    action: String?,
+    titleLineLimit: Int = 1
   ) {
     titleLabel.stringValue = title
+    titleLabel.maximumNumberOfLines = titleLineLimit
+    titleLabel.lineBreakMode = titleLineLimit > 1 ? .byWordWrapping : .byTruncatingMiddle
+    titleLabel.cell?.wraps = titleLineLimit > 1
+    titleLabel.cell?.isScrollable = false
     subtitleLabel.stringValue = subtitle ?? ""
     subtitleLabel.isHidden = subtitle == nil
     resultIcon.image = icon
@@ -682,6 +688,8 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
       case commandCenter(CommandCenterItem)
       case stock(StockQuote)
       case emoji(EmojiResult)
+      case dictionaryEntry
+      case dictionarySuggestion(String)
     }
 
     let title: String
@@ -689,19 +697,25 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     let symbolName: String
     let action: String?
     let target: Target?
+    let titleLineLimit: Int
+    let height: CGFloat
 
     init(
       title: String,
       subtitle: String? = nil,
       symbolName: String = "sparkle",
       action: String? = nil,
-      target: Target? = nil
+      target: Target? = nil,
+      titleLineLimit: Int = 1,
+      height: CGFloat = RiverLayout.rowHeight
     ) {
       self.title = title
       self.subtitle = subtitle
       self.symbolName = symbolName
       self.action = action
       self.target = target
+      self.titleLineLimit = titleLineLimit
+      self.height = height
     }
   }
 
@@ -712,6 +726,7 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
   private let plugins = PluginRunner()
   private let lucky = LuckyResolver()
   private let stocks = StockLookup()
+  private let dictionary = AHDLookup()
   private let applicationCatalog = ApplicationCatalog()
   private let knowledge: ResultKnowledge
   private let panel: LauncherPanel
@@ -787,7 +802,7 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     input.stringValue = ""
     setResultsVisible(false)
     table.reloadData()
-    resize(for: 0)
+    resize(for: [])
     positionOnActiveScreen()
 
     NSApp.activate(ignoringOtherApps: true)
@@ -814,6 +829,7 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     plugins.cancel()
     lucky.cancel()
     stocks.cancel()
+    dictionary.cancel()
     stopLuckyPresentation()
     panel.orderOut(nil)
     statusPanel.orderOut(nil)
@@ -877,7 +893,7 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
   func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
 
   func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-    RiverLayout.rowHeight
+    rows.indices.contains(row) ? rows[row].height : RiverLayout.rowHeight
   }
 
   func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView?
@@ -893,7 +909,8 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
       subtitle: item.subtitle,
       icon: icon(for: item),
       emoji: emoji(for: item),
-      action: item.action
+      action: item.action,
+      titleLineLimit: item.titleLineLimit
     )
     return cell
   }
@@ -1131,6 +1148,7 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     plugins.cancel()
     lucky.cancel()
     stocks.cancel()
+    dictionary.cancel()
     stopLuckyPresentation()
     let text = rawInput.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -1274,15 +1292,54 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     }
 
     if let word = definitionWord(in: text) {
-      let definition = DictionaryLookup.definition(of: word) ?? "No definition found"
       setRows([
         Row(
-          title: definition,
-          subtitle: "Dictionary · \(word)",
-          symbolName: "character.book.closed",
-          action: "Open"
+          title: "Looking up \(word)…",
+          subtitle: "American Heritage Dictionary",
+          symbolName: "character.book.closed"
         )
       ])
+      dictionary.fetch(word) { [weak self] result in
+        guard let self else { return }
+        if let entry = result.entry {
+          let details = [entry.headword, entry.partOfSpeech].filter { !$0.isEmpty }.joined(
+            separator: " · ")
+          self.setRows(
+            [
+              Row(
+                title: entry.definition,
+                subtitle: "AHD · \(details)",
+                symbolName: "character.book.closed",
+                action: "Open",
+                target: .dictionaryEntry,
+                titleLineLimit: 3,
+                height: RiverLayout.dictionaryRowHeight
+              )
+            ], selectFirst: true)
+          return
+        }
+
+        let suggestions = result.suggestions.map { suggestion in
+          Row(
+            title: suggestion,
+            subtitle: "American Heritage Dictionary",
+            symbolName: "character.book.closed",
+            action: "Complete",
+            target: .dictionarySuggestion(suggestion)
+          )
+        }
+        self.setRows(
+          suggestions.isEmpty
+            ? [
+              Row(
+                title: "No definition found",
+                subtitle: "American Heritage Dictionary · \(word)",
+                symbolName: "character.book.closed"
+              )
+            ] : suggestions,
+          selectFirst: !suggestions.isEmpty
+        )
+      }
       return
     }
 
@@ -1509,7 +1566,7 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
       table.deselectAll(nil)
     }
     updatingSelection = false
-    resize(for: rows.count, display: false)
+    resize(for: rows.map(\.height), display: false)
     setResultsVisible(!rows.isEmpty)
     panel.contentView?.layoutSubtreeIfNeeded()
     panel.displayIfNeeded()
@@ -1557,9 +1614,9 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     }
   }
 
-  private func resize(for rowCount: Int, display: Bool = true) {
+  private func resize(for rowHeights: [CGFloat], display: Bool = true) {
     let oldTop = panel.frame.maxY
-    let surfaceHeight = RiverLayout.surfaceHeight(for: rowCount)
+    let surfaceHeight = RiverLayout.surfaceHeight(for: rowHeights)
     let height = surfaceHeight + RiverLayout.glowInset * 2
     var frame = panel.frame
     frame.size.height = height
@@ -1634,6 +1691,20 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     }
 
     if incompleteInputPrompt(for: rawInput) != nil { return }
+
+    if let word = definitionWord(in: text) {
+      if rows.indices.contains(selectedIndex),
+        case .dictionarySuggestion(let suggestion)? = rows[selectedIndex].target
+      {
+        replaceInput(with: "define \(suggestion)")
+        return
+      }
+
+      guard let url = AHDLookup.definitionURL(for: word) else { return }
+      Browser.open(url)
+      dismiss()
+      return
+    }
 
     if let command = RiverCommand(input: text) {
       perform(command)
@@ -1715,16 +1786,6 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
         open(application)
         return
       }
-    }
-
-    if let word = definitionWord(in: text),
-      let url = URL(
-        string: "dict://"
-          + (word.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? word))
-    {
-      NSWorkspace.shared.open(url)
-      dismiss()
-      return
     }
 
     if text.hasPrefix("/") { return }

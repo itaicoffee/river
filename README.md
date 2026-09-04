@@ -1,6 +1,6 @@
 # River
 
-River is a fast, native macOS launcher that stays out of the way. Press **Control-F** to open it,
+River is a fast, native macOS launcher that stays out of the way. Press **Command-Shift-Space** to open it,
 type what you want, and press Return. It has no Dock icon, no menu bar item, no preferences window,
 and no server process.
 
@@ -41,7 +41,7 @@ To update, run the one-line installer again. Your configuration and plugins are 
 | `2 + 3 * 4` | Shows the answer live; Return copies it |
 | `15% of 80` | Calculates percentages |
 | `10 km in mi` | Converts common units |
-| `define word` | Shows a definition; Return opens Dictionary |
+| `define word` | Autocompletes and defines words with AHD; Return opens the AHD entry |
 | `emoji heart` | Fuzzy-matches emoji names; arrows choose one and Return copies it |
 | Quicklink name + query | Opens a configured URL or local path |
 | `ai anything` | Opens the query in ChatGPT Chat |
@@ -86,7 +86,7 @@ There are no third-party Swift dependencies. The release binary links only to ma
 River creates `~/.config/river/config` on first install and applies changes without a restart:
 
 ```ini
-hotkey = ctrl+f
+hotkey = cmd+shift+space
 search_url = https://www.google.com/search?q={query}
 lucky_url = https://www.google.com/search?btnI=1&q={query}
 plugin_dir = ~/.config/river/plugins
@@ -179,8 +179,8 @@ stay under `~/.config/river`; the ranking database is written with user-only per
 launching, file search, calculations, unit conversions, and power status are local.
 
 Network requests happen only when an action needs them: web and Lucky searches go to the configured
-search engine, `ai` and `work` open ChatGPT, stock quotes come from Yahoo Finance, definitions use
-macOS Dictionary services, and the bundled weather/UV plugins call Open-Meteo with coordinates from
+search engine, `ai` and `work` open ChatGPT, stock quotes come from Yahoo Finance, definitions come
+from the American Heritage Dictionary, and the bundled weather/UV plugins call Open-Meteo with coordinates from
 Core Location. Status plugins run on
 their filename schedule even while River is hidden. Plugins are programs on your machine and run
 with your user permissions, so only install plugins you trust.

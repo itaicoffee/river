@@ -17,6 +17,7 @@ let package = Package(
         .linkedFramework("AppKit"),
         .linkedFramework("Carbon"),
         .linkedFramework("CoreLocation"),
+        .linkedFramework("CoreWLAN"),
         .linkedFramework("CoreServices"),
         .unsafeFlags([
           "-Xlinker", "-sectcreate",

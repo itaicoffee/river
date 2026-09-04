@@ -39,4 +39,4 @@ case ":${PATH:-}:" in
   *) printf '\nAdd River to your shell PATH:\n  export PATH="$HOME/.local/bin:$PATH"\n' ;;
 esac
 
-printf '\nDone. Press Control-F to open River.\n'
+printf '\nDone. Press Command-Shift-Space to open River.\n'

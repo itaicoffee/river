@@ -50,7 +50,7 @@ enum Installer {
     print("  binary: \(Paths.installedBinary)")
     print("  app: \(Paths.installedApp)")
     print("  config: \(Paths.configFile)")
-    print("  hotkey: Ctrl+F")
+    print("  hotkey: Cmd+Shift+Space")
   }
 
   static func uninstall() throws {
@@ -421,25 +421,21 @@ enum Installer {
 
   static let wifiPlugin = """
     #!/bin/zsh
-    profile=$(/usr/sbin/system_profiler SPAirPortDataType 2>/dev/null)
     interface=$(/usr/sbin/networksetup -listallhardwareports 2>/dev/null | /usr/bin/awk '/Wi-Fi|AirPort/{getline; print $2; exit}')
     if [[ -z "$interface" ]]; then
-      interface=$(print -r -- "$profile" | /usr/bin/awk '/^[[:space:]]+en[0-9]+:$/ {gsub(/[[:space:]:]/, ""); print; exit}')
+      interface=$(/usr/sbin/scutil --nwi 2>/dev/null | /usr/bin/awk '/^[[:space:]]+en[0-9]+[[:space:]]+:/ {print $1; exit}')
     fi
     summary=$(/usr/sbin/ipconfig getsummary "$interface" 2>/dev/null)
-    if ! print -r -- "$summary" | /usr/bin/grep -q 'LinkStatusActive : TRUE' \\
-      && ! print -r -- "$profile" | /usr/bin/grep -q 'Status: Connected'; then
+    if ! print -r -- "$summary" | /usr/bin/grep -q 'LinkStatusActive : TRUE'; then
       print "WiFi off"
       exit 0
     fi
-    ssid=$(/usr/sbin/networksetup -getairportnetwork "$interface" 2>/dev/null | /usr/bin/sed -nE 's/^Current Wi-Fi Network: (.*)/\\1/p')
-    signal=$(print -r -- "$profile" | /usr/bin/awk -F': ' 'index($0, "Signal / Noise:") { print $2; exit }' | /usr/bin/awk '{print $1}')
-    label=${ssid:-connected}
-    if [[ -n "$signal" ]]; then
-      print "WiFi ${label} ${signal}dBm"
-    else
-      print "WiFi ${label}"
+    ssid=${RIVER_WIFI_SSID:-}
+    if [[ -z "$ssid" ]]; then
+      ssid=$(/usr/sbin/networksetup -getairportnetwork "$interface" 2>/dev/null | /usr/bin/sed -nE 's/^Current Wi-Fi Network: (.*)/\\1/p')
     fi
+    label=${ssid:-connected}
+    print "WiFi ${label}"
     """
 
   static let legacySpeedtestPlugin = """

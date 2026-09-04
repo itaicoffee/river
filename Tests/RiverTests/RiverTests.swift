@@ -109,6 +109,79 @@ final class RiverTests: XCTestCase {
     XCTAssertEqual(url?.absoluteString, "https://www.google.com/search?q=swift%20%26%20appkit")
   }
 
+  func testAHDLookupURLsUseTheDocumentedQueryParameters() {
+    XCTAssertEqual(
+      AHDLookup.suggestionURL(for: "usef")?.absoluteString,
+      "https://www.ahdictionary.com/ajax/suggest.html?query=usef"
+    )
+    XCTAssertEqual(
+      AHDLookup.definitionURL(for: "useful thing")?.absoluteString,
+      "https://www.ahdictionary.com/word/search.html?q=useful%20thing"
+    )
+  }
+
+  func testAHDSuggestionParsing() {
+    let data = Data(
+      "<suggest><term>useful</term><term> usefully </term><term>usefulness</term></suggest>"
+        .utf8)
+
+    XCTAssertEqual(
+      AHDResponseParser.suggestions(from: data),
+      ["useful", "usefully", "usefulness"]
+    )
+  }
+
+  func testAHDDefinitionParsingUsesTheFirstSenseInsideResults() {
+    let data = Data(
+      """
+      <html><body>
+        <div class="pseg"><i>wrong</i>Outside the result container.</div>
+        <div id="results"><table><tr><td>
+          <div class="rtseg"><b><font color="#006595">use·ful</font></b></div>
+          <div class="pseg"><i>adj.</i>
+            <div class="ds-list"><b><font>1. </font></b>
+              Having a beneficial use; serviceable: <font><i>a useful kitchen gadget.</i></font>
+            </div>
+            <div class="ds-list"><b><font>2. </font></b>Being of practical use.</div>
+          </div>
+        </td></tr></table></div>
+      </body></html>
+      """.utf8)
+
+    XCTAssertEqual(
+      AHDResponseParser.entry(from: data),
+      AHDEntry(
+        headword: "use·ful",
+        partOfSpeech: "adj.",
+        definition: "Having a beneficial use; serviceable: a useful kitchen gadget."
+      )
+    )
+  }
+
+  func testAHDDefinitionParsingSupportsAnUnnumberedSense() {
+    let data = Data(
+      """
+      <html><body><div id="results">
+        <div class="rtseg"><font color="#006595">maiden over</font></div>
+        <div class="pseg"><i>n.</i> An over in cricket during which no runs are scored.</div>
+      </div></body></html>
+      """.utf8)
+
+    XCTAssertEqual(
+      AHDResponseParser.entry(from: data),
+      AHDEntry(
+        headword: "maiden over",
+        partOfSpeech: "n.",
+        definition: "An over in cricket during which no runs are scored."
+      )
+    )
+  }
+
+  func testAHDDefinitionParsingRejectsAMissingEntry() {
+    let data = Data("<html><body><div id=\"results\">No word definition found</div></body></html>".utf8)
+    XCTAssertNil(AHDResponseParser.entry(from: data))
+  }
+
   func testWebURLBuilderRecognizesFullAddresses() {
     XCTAssertEqual(URLBuilder.webURL(for: "google.com")?.absoluteString, "https://google.com")
     XCTAssertEqual(URLBuilder.webURL(for: "qz.com")?.absoluteString, "https://qz.com")
@@ -593,8 +666,9 @@ final class RiverTests: XCTestCase {
 
   func testBundledWiFiUsesLinkStateWhenSSIDIsPrivacyProtected() {
     XCTAssertTrue(Installer.wifiPlugin.contains("LinkStatusActive : TRUE"))
-    XCTAssertTrue(Installer.wifiPlugin.contains("Status: Connected"))
+    XCTAssertTrue(Installer.wifiPlugin.contains("RIVER_WIFI_SSID"))
     XCTAssertTrue(Installer.wifiPlugin.contains("label=${ssid:-connected}"))
+    XCTAssertFalse(Installer.wifiPlugin.contains("system_profiler"))
     XCTAssertFalse(Installer.legacyWifiPlugin.contains("LinkStatusActive : TRUE"))
   }
 

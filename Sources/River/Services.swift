@@ -1240,15 +1240,6 @@ extension Process {
   }
 }
 
-enum DictionaryLookup {
-  static func definition(of word: String) -> String? {
-    let trimmed = word.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else { return nil }
-    let range = CFRange(location: 0, length: (trimmed as NSString).length)
-    return DCSCopyTextDefinition(nil, trimmed as CFString, range)?.takeRetainedValue() as String?
-  }
-}
-
 enum URLBuilder {
   static func webURL(for input: String) -> URL? {
     let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)

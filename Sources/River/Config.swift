@@ -8,7 +8,11 @@ struct Quicklink: Equatable {
 }
 
 struct AppConfig: Equatable {
+  static let defaultTextSize = 24
+  static let allowedTextSizes = 12...48
+
   var hotkey = "cmd+shift+space"
+  var textSize = AppConfig.defaultTextSize
   var searchURL = "https://www.google.com/search?q={query}"
   var luckyURL = "https://www.google.com/search?btnI=1&q={query}"
   var pluginDirectory = "~/.config/river/plugins"
@@ -19,6 +23,7 @@ struct AppConfig: Equatable {
   static let defaultText = """
     # River reloads this file automatically. No restart is needed.
     hotkey = cmd+shift+space
+    text_size = 24
     search_url = https://www.google.com/search?q={query}
     lucky_url = https://www.google.com/search?btnI=1&q={query}
     plugin_dir = ~/.config/river/plugins
@@ -44,6 +49,10 @@ struct AppConfig: Equatable {
 
       switch key {
       case "hotkey": config.hotkey = value
+      case "text_size":
+        if let size = Int(value), allowedTextSizes.contains(size) {
+          config.textSize = size
+        }
       case "search_url": config.searchURL = value
       case "lucky_url": config.luckyURL = value
       case "plugin_dir": config.pluginDirectory = value
@@ -104,6 +113,64 @@ final class ConfigStore {
   func stopWatching() {
     timer?.invalidate()
     timer = nil
+  }
+
+  func setTextSize(_ requestedSize: Int) throws {
+    let size = min(
+      AppConfig.allowedTextSizes.upperBound,
+      max(AppConfig.allowedTextSizes.lowerBound, requestedSize)
+    )
+    guard size != value.textSize else { return }
+
+    let existing =
+      FileManager.default.contents(atPath: path)
+      .flatMap { String(data: $0, encoding: .utf8) } ?? AppConfig.defaultText
+    let updatedText = Self.replacingSetting(
+      named: "text_size", with: String(size), in: existing
+    )
+    guard let data = updatedText.data(using: .utf8) else { return }
+
+    let url = URL(fileURLWithPath: path)
+    try FileManager.default.createDirectory(
+      at: url.deletingLastPathComponent(),
+      withIntermediateDirectories: true
+    )
+    try data.write(to: url, options: .atomic)
+
+    lastContents = data
+    let updated = AppConfig.parse(updatedText)
+    guard updated != value else { return }
+    value = updated
+    onChange?(updated)
+  }
+
+  static func replacingSetting(named key: String, with value: String, in text: String) -> String {
+    var lines = text.components(separatedBy: .newlines)
+    var replaced = false
+
+    for index in lines.indices {
+      let line = lines[index]
+      let trimmed = line.trimmingCharacters(in: .whitespaces)
+      guard !trimmed.hasPrefix("#"), let separator = trimmed.firstIndex(of: "=") else {
+        continue
+      }
+      let existingKey = trimmed[..<separator].trimmingCharacters(in: .whitespaces)
+      guard existingKey == key else { continue }
+
+      let indentation = line.prefix(while: { $0 == " " || $0 == "\t" })
+      lines[index] = "\(indentation)\(key) = \(value)"
+      replaced = true
+    }
+
+    if !replaced {
+      let setting = "\(key) = \(value)"
+      if lines.last == "" {
+        lines.insert(setting, at: lines.count - 1)
+      } else {
+        lines.append(setting)
+      }
+    }
+    return lines.joined(separator: "\n")
   }
 
   private func reloadIfNeeded() {

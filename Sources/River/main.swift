@@ -24,6 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     configStore.onChange = { [weak self] config in
       self?.registerHotKey(config.hotkey)
       self?.statusPlugins.update(config: config)
+      self?.launcher?.apply(config: config)
     }
     configStore.startWatching()
   }

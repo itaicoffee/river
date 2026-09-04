@@ -8,6 +8,7 @@ final class RiverTests: XCTestCase {
       """
       # hello
       hotkey = cmd+space
+      text_size = 32
       max_file_results = 7
       plugin_timeout_ms = 1200
       quicklink.github = https://github.com/search?q={query}
@@ -15,6 +16,7 @@ final class RiverTests: XCTestCase {
       """)
 
     XCTAssertEqual(config.hotkey, "cmd+space")
+    XCTAssertEqual(config.textSize, 32)
     XCTAssertEqual(config.maxFileResults, 7)
     XCTAssertEqual(config.pluginTimeoutMilliseconds, 1_200)
     XCTAssertEqual(config.searchURL, AppConfig().searchURL)
@@ -43,9 +45,35 @@ final class RiverTests: XCTestCase {
       """
       max_file_results = 999
       plugin_timeout_ms = 10
+      text_size = 100
       """)
     XCTAssertEqual(config.maxFileResults, AppConfig().maxFileResults)
     XCTAssertEqual(config.pluginTimeoutMilliseconds, AppConfig().pluginTimeoutMilliseconds)
+    XCTAssertEqual(config.textSize, AppConfig.defaultTextSize)
+  }
+
+  func testConfigStorePersistsTextSizeWithoutDiscardingOtherSettings() throws {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("river-config-test-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let path = directory.appendingPathComponent("config").path
+    try "hotkey = ctrl+f\n# text_size = 99\nquicklink.docs = https://example.com\n"
+      .write(toFile: path, atomically: true, encoding: .utf8)
+    let store = ConfigStore(path: path)
+    var observedSize: Int?
+    store.onChange = { observedSize = $0.textSize }
+
+    try store.setTextSize(30)
+
+    let saved = try String(contentsOfFile: path, encoding: .utf8)
+    XCTAssertTrue(saved.contains("hotkey = ctrl+f"))
+    XCTAssertTrue(saved.contains("# text_size = 99"))
+    XCTAssertTrue(saved.contains("text_size = 30"))
+    XCTAssertTrue(saved.contains("quicklink.docs = https://example.com"))
+    XCTAssertEqual(store.value.textSize, 30)
+    XCTAssertEqual(observedSize, 30)
   }
 
   func testHotKeyParsing() {
@@ -631,6 +659,27 @@ final class RiverTests: XCTestCase {
     XCTAssertFalse(LauncherKeyAction.shouldRevealFile(modifierFlags: [.command]))
   }
 
+  func testCommandPlusAndMinusAdjustTextSize() {
+    XCTAssertEqual(
+      LauncherKeyAction.textSizeAdjustment(
+        modifierFlags: [.command, .shift], charactersIgnoringModifiers: "=", characters: "+"),
+      2
+    )
+    XCTAssertEqual(
+      LauncherKeyAction.textSizeAdjustment(
+        modifierFlags: [.command], charactersIgnoringModifiers: "-"),
+      -2
+    )
+    XCTAssertNil(
+      LauncherKeyAction.textSizeAdjustment(
+        modifierFlags: [], charactersIgnoringModifiers: "-")
+    )
+    XCTAssertNil(
+      LauncherKeyAction.textSizeAdjustment(
+        modifierFlags: [.command, .option], charactersIgnoringModifiers: "=")
+    )
+  }
+
   func testInstallerRunsFromAnIdentifiedAppBundleForLocationPermission() {
     XCTAssertEqual(
       Installer.launchAgentPropertyList["ProgramArguments"] as? [String],
@@ -730,6 +779,41 @@ final class RiverTests: XCTestCase {
       catalog.matches("code", limit: 2, preferredIdentifiers: [codexIdentifier]).map(\.name),
       ["Code", "Codex"]
     )
+  }
+
+  func testSystemSettingsCatalogMatchesPaneNamesAndNativeSearchTerms() {
+    let displays = SystemSettingsResult(
+      name: "Displays",
+      identifier: "com.apple.Displays-Settings.extension",
+      searchTerms: ["Screen Resolution", "monitors", "Night Shift"]
+    )
+    let sound = SystemSettingsResult(
+      name: "Sound",
+      identifier: "com.apple.Sound-Settings.extension",
+      searchTerms: ["output volume", "speakers"]
+    )
+    let catalog = SystemSettingsCatalog(results: [sound, displays])
+
+    XCTAssertEqual(catalog.exactMatch(named: "DISPLAYS"), displays)
+    XCTAssertEqual(catalog.matches("display", limit: 5).first, displays)
+    XCTAssertEqual(catalog.matches("resolution", limit: 5).first, displays)
+    XCTAssertEqual(catalog.matches("speakers", limit: 5).first, sound)
+    XCTAssertEqual(
+      catalog.matches(
+        "displays", limit: 5, preferredIdentifiers: [sound.knowledgeIdentifier]
+      ).first,
+      displays
+    )
+    XCTAssertEqual(
+      displays.url?.absoluteString,
+      "x-apple.systempreferences:com.apple.Displays-Settings.extension"
+    )
+  }
+
+  func testSystemSettingsCatalogDiscoversTheNativeDisplaysPane() throws {
+    let displays = try XCTUnwrap(SystemSettingsCatalog().exactMatch(named: "displays"))
+    XCTAssertEqual(displays.name, "Displays")
+    XCTAssertTrue(displays.identifier.lowercased().contains("displays"))
   }
 
   func testResultKnowledgeLearnsRelearnsAndPersists() throws {

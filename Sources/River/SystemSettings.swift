@@ -58,10 +58,14 @@ final class SystemSettingsCatalog {
       return (setting, bestScore)
     }
     .sorted {
+      let leftIsExact = $0.0.normalizedName == query
+      let rightIsExact = $1.0.normalizedName == query
+      if leftIsExact != rightIsExact { return leftIsExact }
+
       let leftPreferred = preferredOrder[$0.0.result.knowledgeIdentifier]
       let rightPreferred = preferredOrder[$1.0.result.knowledgeIdentifier]
       switch (leftPreferred, rightPreferred) {
-      case let (left?, right?) where left != right: return left < right
+      case (let left?, let right?) where left != right: return left < right
       case (_?, nil): return true
       case (nil, _?): return false
       default: break
@@ -127,8 +131,9 @@ final class SystemSettingsCatalog {
       !name.isEmpty
     else { return nil }
 
-    let searchTerms = (settingsAttributes["searchTermsFileName"] as? String)
-      .map { searchTerms(named: $0, in: bundle) } ?? []
+    let searchTerms =
+      (settingsAttributes["searchTermsFileName"] as? String)
+      .map { loadSearchTerms(named: $0, in: bundle) } ?? []
     return SystemSettingsResult(name: name, identifier: identifier, searchTerms: searchTerms)
   }
 
@@ -141,7 +146,7 @@ final class SystemSettingsCatalog {
       .first(where: { !$0.isEmpty })
   }
 
-  private static func searchTerms(named name: String, in bundle: Bundle) -> [String] {
+  private static func loadSearchTerms(named name: String, in bundle: Bundle) -> [String] {
     guard let url = bundle.url(forResource: name, withExtension: "searchTerms"),
       let data = try? Data(contentsOf: url),
       let root = try? PropertyListSerialization.propertyList(from: data, format: nil)

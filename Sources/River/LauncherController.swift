@@ -2,6 +2,8 @@ import AppKit
 import Foundation
 
 private final class LauncherPanel: NSPanel {
+  var onTextSizeAdjustment: ((Int) -> Void)?
+
   override var canBecomeKey: Bool { true }
   override var canBecomeMain: Bool { false }
 
@@ -9,6 +11,15 @@ private final class LauncherPanel: NSPanel {
     let modifiers = event.modifierFlags
       .intersection(.deviceIndependentFlagsMask)
       .subtracting(.capsLock)
+    if let adjustment = LauncherKeyAction.textSizeAdjustment(
+      modifierFlags: modifiers,
+      charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+      characters: event.characters
+    ) {
+      onTextSizeAdjustment?(adjustment)
+      return true
+    }
+
     if modifiers == .command,
       event.charactersIgnoringModifiers?.lowercased() == "a",
       let editor = firstResponder as? NSTextView
@@ -32,6 +43,7 @@ private final class LauncherPanel: NSPanel {
 private final class GlowView: NSView {
   private let gradient = CAGradientLayer()
   private var isThinking = false
+  var visualScale: CGFloat = 1
   var surfaceCornerRadius = RiverLayout.cornerRadius {
     didSet {
       layer?.cornerRadius = surfaceCornerRadius
@@ -106,7 +118,7 @@ private final class GlowView: NSView {
     opacity.repeatCount = .infinity
 
     let radius = CAKeyframeAnimation(keyPath: "shadowRadius")
-    radius.values = [20, 32, 20]
+    radius.values = [20 * visualScale, 32 * visualScale, 20 * visualScale]
     radius.keyTimes = [0, 0.5, 1]
     radius.timingFunctions = [timing, timing]
     radius.duration = 1.4
@@ -139,7 +151,7 @@ private final class GlowView: NSView {
     CATransaction.setDisableActions(true)
     layer.borderColor = restingBorderColor
     layer.shadowOpacity = 0.46
-    layer.shadowRadius = 24
+    layer.shadowRadius = 24 * visualScale
     CATransaction.commit()
   }
 }
@@ -168,18 +180,32 @@ private enum RiverLayout {
   static let statusScreenMargin: CGFloat = 16
   static let maximumVisibleRows = 5
 
-  static var windowWidth: CGFloat { surfaceWidth + glowInset * 2 }
-  static var restingWindowHeight: CGFloat { inputAreaHeight + glowInset * 2 }
-
-  static func statusSurfaceHeight(for rowCount: Int) -> CGFloat {
-    statusVerticalPadding * 2 + CGFloat(rowCount) * statusRowHeight
+  static func scale(for textSize: Int) -> CGFloat {
+    CGFloat(textSize) / CGFloat(AppConfig.defaultTextSize)
   }
 
-  static func surfaceHeight(for rowHeights: [CGFloat]) -> CGFloat {
-    guard !rowHeights.isEmpty else { return inputAreaHeight }
+  static func scaled(_ value: CGFloat, by scale: CGFloat) -> CGFloat { value * scale }
+
+  static func windowWidth(scale: CGFloat) -> CGFloat {
+    scaled(surfaceWidth + glowInset * 2, by: scale)
+  }
+
+  static func restingWindowHeight(scale: CGFloat) -> CGFloat {
+    scaled(inputAreaHeight + glowInset * 2, by: scale)
+  }
+
+  static func statusSurfaceHeight(for rowCount: Int, scale: CGFloat) -> CGFloat {
+    scaled(statusVerticalPadding * 2 + CGFloat(rowCount) * statusRowHeight, by: scale)
+  }
+
+  static func surfaceHeight(for rowHeights: [CGFloat], scale: CGFloat) -> CGFloat {
+    guard !rowHeights.isEmpty else { return scaled(inputAreaHeight, by: scale) }
     let visibleHeight = rowHeights.prefix(maximumVisibleRows).reduce(0, +)
-    return inputAreaHeight + dividerHeight + resultsTopInset + resultsBottomInset
-      + visibleHeight + resultsClipAllowance
+    return scaled(
+      inputAreaHeight + dividerHeight + resultsTopInset + resultsBottomInset
+        + visibleHeight + resultsClipAllowance,
+      by: scale
+    )
   }
 }
 
@@ -189,6 +215,8 @@ private final class ResultCellView: NSTableCellView {
   let titleLabel = NSTextField(labelWithString: "")
   let subtitleLabel = NSTextField(labelWithString: "")
   private let actionLabel = NSTextField(labelWithString: "")
+  private let textStack = NSStackView()
+  private var scaledConstraints: [(constraint: NSLayoutConstraint, baseConstant: CGFloat)] = []
 
   override init(frame frameRect: NSRect) {
     super.init(frame: frameRect)
@@ -217,30 +245,35 @@ private final class ResultCellView: NSTableCellView {
     actionLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
     actionLabel.translatesAutoresizingMaskIntoConstraints = false
 
-    let stack = NSStackView(views: [titleLabel, subtitleLabel])
-    stack.orientation = .vertical
-    stack.alignment = .leading
-    stack.spacing = 1
-    stack.translatesAutoresizingMaskIntoConstraints = false
+    textStack.addArrangedSubview(titleLabel)
+    textStack.addArrangedSubview(subtitleLabel)
+    textStack.orientation = .vertical
+    textStack.alignment = .leading
+    textStack.spacing = 1
+    textStack.translatesAutoresizingMaskIntoConstraints = false
 
     addSubview(resultIcon)
     addSubview(resultEmoji)
-    addSubview(stack)
+    addSubview(textStack)
     addSubview(actionLabel)
-    NSLayoutConstraint.activate([
-      resultIcon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
-      resultIcon.centerYAnchor.constraint(equalTo: centerYAnchor),
-      resultIcon.widthAnchor.constraint(equalToConstant: 30),
-      resultIcon.heightAnchor.constraint(equalToConstant: 30),
-      resultEmoji.leadingAnchor.constraint(equalTo: resultIcon.leadingAnchor),
-      resultEmoji.trailingAnchor.constraint(equalTo: resultIcon.trailingAnchor),
-      resultEmoji.centerYAnchor.constraint(equalTo: resultIcon.centerYAnchor),
-      stack.leadingAnchor.constraint(equalTo: resultIcon.trailingAnchor, constant: 12),
-      stack.trailingAnchor.constraint(lessThanOrEqualTo: actionLabel.leadingAnchor, constant: -14),
-      stack.centerYAnchor.constraint(equalTo: centerYAnchor),
-      actionLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -15),
-      actionLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-    ])
+    scaledConstraints = [
+      (resultIcon.leadingAnchor.constraint(equalTo: leadingAnchor), 14),
+      (resultIcon.widthAnchor.constraint(equalToConstant: 0), 30),
+      (resultIcon.heightAnchor.constraint(equalToConstant: 0), 30),
+      (textStack.leadingAnchor.constraint(equalTo: resultIcon.trailingAnchor), 12),
+      (textStack.trailingAnchor.constraint(lessThanOrEqualTo: actionLabel.leadingAnchor), -14),
+      (actionLabel.trailingAnchor.constraint(equalTo: trailingAnchor), -15),
+    ]
+    NSLayoutConstraint.activate(
+      scaledConstraints.map(\.constraint) + [
+        resultIcon.centerYAnchor.constraint(equalTo: centerYAnchor),
+        resultEmoji.leadingAnchor.constraint(equalTo: resultIcon.leadingAnchor),
+        resultEmoji.trailingAnchor.constraint(equalTo: resultIcon.trailingAnchor),
+        resultEmoji.centerYAnchor.constraint(equalTo: resultIcon.centerYAnchor),
+        textStack.centerYAnchor.constraint(equalTo: centerYAnchor),
+        actionLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+      ])
+    applyScale(1)
   }
 
   required init?(coder: NSCoder) { nil }
@@ -270,10 +303,29 @@ private final class ResultCellView: NSTableCellView {
     actionLabel.stringValue = action.map { "\($0)   ↵" } ?? ""
     actionLabel.isHidden = action == nil
   }
+
+  func applyScale(_ scale: CGFloat) {
+    resultEmoji.font = NSFont(name: "Apple Color Emoji", size: 24 * scale)
+      ?? .systemFont(ofSize: 24 * scale)
+    titleLabel.font = .systemFont(ofSize: 16 * scale, weight: .semibold)
+    subtitleLabel.font = .systemFont(ofSize: 13.5 * scale, weight: .regular)
+    actionLabel.font = .systemFont(ofSize: 12 * scale, weight: .semibold)
+    textStack.spacing = 1 * scale
+    for item in scaledConstraints {
+      item.constraint.constant = item.baseConstant * scale
+    }
+  }
 }
 
 private final class ResultRowView: NSTableRowView {
   private var isHovered = false
+
+  init(scale: CGFloat) {
+    super.init(frame: .zero)
+    wantsLayer = true
+    layer?.cornerRadius = 11 * scale
+    if #available(macOS 10.15, *) { layer?.cornerCurve = .continuous }
+  }
 
   override init(frame frameRect: NSRect) {
     super.init(frame: frameRect)
@@ -386,6 +438,25 @@ enum LauncherKeyAction {
       .subtracting(.capsLock)
       .contains(.shift)
   }
+
+  static func textSizeAdjustment(
+    modifierFlags: NSEvent.ModifierFlags,
+    charactersIgnoringModifiers: String?,
+    characters: String? = nil
+  ) -> Int? {
+    let modifiers =
+      modifierFlags
+      .intersection(.deviceIndependentFlagsMask)
+      .subtracting(.capsLock)
+    guard modifiers.contains(.command), !modifiers.contains(.control),
+      !modifiers.contains(.option), modifiers.subtracting(.shift) == .command
+    else { return nil }
+
+    let key = charactersIgnoringModifiers?.lowercased()
+    if key == "-", !modifiers.contains(.shift) { return -2 }
+    if key == "=" || key == "+" || characters == "+" { return 2 }
+    return nil
+  }
 }
 
 private struct SpeedtestMetrics {
@@ -427,7 +498,7 @@ private final class SpeedtestMetricsView: NSView {
   private let downloadBarFill = NSView()
   private let uploadBarFill = NSView()
 
-  init(metrics: SpeedtestMetrics) {
+  init(metrics: SpeedtestMetrics, scale: CGFloat) {
     super.init(frame: .zero)
 
     let textColor = NSColor.white.withAlphaComponent(metrics.isStale ? 0.56 : 0.94)
@@ -435,53 +506,53 @@ private final class SpeedtestMetricsView: NSView {
     let fillColor = NSColor(calibratedRed: 0.38, green: 0.72, blue: 1.00, alpha: metrics.isStale ? 0.48 : 0.82)
 
     downloadLabel.stringValue = "↓" + SpeedtestMetrics.formatThroughput(mbps: metrics.download)
-    downloadLabel.font = .monospacedDigitSystemFont(ofSize: 13.5, weight: .semibold)
+    downloadLabel.font = .monospacedDigitSystemFont(ofSize: 13.5 * scale, weight: .semibold)
     downloadLabel.textColor = textColor
     downloadLabel.alignment = .right
     downloadLabel.translatesAutoresizingMaskIntoConstraints = false
 
     uploadLabel.stringValue = "↑" + SpeedtestMetrics.formatThroughput(mbps: metrics.upload)
-    uploadLabel.font = .monospacedDigitSystemFont(ofSize: 13.5, weight: .semibold)
+    uploadLabel.font = .monospacedDigitSystemFont(ofSize: 13.5 * scale, weight: .semibold)
     uploadLabel.textColor = textColor
     uploadLabel.alignment = .right
     uploadLabel.translatesAutoresizingMaskIntoConstraints = false
 
     downloadBar.wantsLayer = true
     downloadBar.layer?.backgroundColor = barColor.cgColor
-    downloadBar.layer?.cornerRadius = 2
+    downloadBar.layer?.cornerRadius = 2 * scale
     downloadBar.translatesAutoresizingMaskIntoConstraints = false
 
     uploadBar.wantsLayer = true
     uploadBar.layer?.backgroundColor = barColor.cgColor
-    uploadBar.layer?.cornerRadius = 2
+    uploadBar.layer?.cornerRadius = 2 * scale
     uploadBar.translatesAutoresizingMaskIntoConstraints = false
 
     downloadBarFill.wantsLayer = true
     downloadBarFill.layer?.backgroundColor = fillColor.cgColor
-    downloadBarFill.layer?.cornerRadius = 2
+    downloadBarFill.layer?.cornerRadius = 2 * scale
     downloadBarFill.translatesAutoresizingMaskIntoConstraints = false
 
     uploadBarFill.wantsLayer = true
     uploadBarFill.layer?.backgroundColor = fillColor.cgColor
-    uploadBarFill.layer?.cornerRadius = 2
+    uploadBarFill.layer?.cornerRadius = 2 * scale
     uploadBarFill.translatesAutoresizingMaskIntoConstraints = false
 
     let downloadStack = NSStackView(views: [downloadBar, downloadLabel])
     downloadStack.orientation = .horizontal
     downloadStack.alignment = .centerY
-    downloadStack.spacing = 6
+    downloadStack.spacing = 6 * scale
     downloadStack.translatesAutoresizingMaskIntoConstraints = false
 
     let uploadStack = NSStackView(views: [uploadBar, uploadLabel])
     uploadStack.orientation = .horizontal
     uploadStack.alignment = .centerY
-    uploadStack.spacing = 6
+    uploadStack.spacing = 6 * scale
     uploadStack.translatesAutoresizingMaskIntoConstraints = false
 
     let mainStack = NSStackView(views: [downloadStack, uploadStack])
     mainStack.orientation = .horizontal
     mainStack.alignment = .centerY
-    mainStack.spacing = 8
+    mainStack.spacing = 8 * scale
     mainStack.translatesAutoresizingMaskIntoConstraints = false
 
     addSubview(mainStack)
@@ -497,12 +568,12 @@ private final class SpeedtestMetricsView: NSView {
       mainStack.trailingAnchor.constraint(equalTo: trailingAnchor),
       mainStack.topAnchor.constraint(equalTo: topAnchor),
       mainStack.bottomAnchor.constraint(equalTo: bottomAnchor),
-      downloadBar.widthAnchor.constraint(equalToConstant: 32),
-      downloadBar.heightAnchor.constraint(equalToConstant: 4),
-      uploadBar.widthAnchor.constraint(equalToConstant: 32),
-      uploadBar.heightAnchor.constraint(equalToConstant: 4),
-      downloadLabel.widthAnchor.constraint(equalToConstant: 74),
-      uploadLabel.widthAnchor.constraint(equalToConstant: 74),
+      downloadBar.widthAnchor.constraint(equalToConstant: 32 * scale),
+      downloadBar.heightAnchor.constraint(equalToConstant: 4 * scale),
+      uploadBar.widthAnchor.constraint(equalToConstant: 32 * scale),
+      uploadBar.heightAnchor.constraint(equalToConstant: 4 * scale),
+      downloadLabel.widthAnchor.constraint(equalToConstant: 74 * scale),
+      uploadLabel.widthAnchor.constraint(equalToConstant: 74 * scale),
       downloadBarFill.leadingAnchor.constraint(equalTo: downloadBar.leadingAnchor),
       downloadBarFill.topAnchor.constraint(equalTo: downloadBar.topAnchor),
       downloadBarFill.bottomAnchor.constraint(equalTo: downloadBar.bottomAnchor),
@@ -525,12 +596,12 @@ private final class StatusPluginRowView: NSView {
   private let divider = NSView()
   private var speedtestMetricsView: SpeedtestMetricsView?
 
-  init(snapshot: StatusPluginSnapshot, showsDivider: Bool) {
+  init(snapshot: StatusPluginSnapshot, showsDivider: Bool, scale: CGFloat) {
     super.init(frame: .zero)
 
     let tint = Self.tint(for: snapshot)
     iconPlate.wantsLayer = true
-    iconPlate.layer?.cornerRadius = 8
+    iconPlate.layer?.cornerRadius = 8 * scale
     if #available(macOS 10.15, *) { iconPlate.layer?.cornerCurve = .continuous }
     iconPlate.layer?.backgroundColor = tint.withAlphaComponent(0.13).cgColor
     iconPlate.layer?.borderWidth = 0.5
@@ -547,14 +618,14 @@ private final class StatusPluginRowView: NSView {
 
     let readableName = StatusPluginPresentation.readableName(for: snapshot.displayName)
     nameLabel.stringValue = readableName
-    nameLabel.font = .systemFont(ofSize: 11.5, weight: .semibold)
+    nameLabel.font = .systemFont(ofSize: 11.5 * scale, weight: .semibold)
     nameLabel.textColor = NSColor.white.withAlphaComponent(0.62)
     nameLabel.lineBreakMode = .byTruncatingTail
     nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     nameLabel.translatesAutoresizingMaskIntoConstraints = false
 
     valueLabel.stringValue = StatusPluginPresentation.displayValue(for: snapshot)
-    valueLabel.font = .systemFont(ofSize: 13.5, weight: .semibold)
+    valueLabel.font = .systemFont(ofSize: 13.5 * scale, weight: .semibold)
     valueLabel.textColor = NSColor.white.withAlphaComponent(snapshot.output == nil ? 0.42 : 0.94)
     valueLabel.alignment = .right
     valueLabel.lineBreakMode = .byTruncatingTail
@@ -573,42 +644,44 @@ private final class StatusPluginRowView: NSView {
     addSubview(divider)
 
     if let metrics = Self.parseSpeedtest(snapshot: snapshot) {
-      let metricsView = SpeedtestMetricsView(metrics: metrics)
+      let metricsView = SpeedtestMetricsView(metrics: metrics, scale: scale)
       metricsView.translatesAutoresizingMaskIntoConstraints = false
       addSubview(metricsView)
       speedtestMetricsView = metricsView
       valueLabel.isHidden = true
 
       NSLayoutConstraint.activate([
-        metricsView.leadingAnchor.constraint(greaterThanOrEqualTo: nameLabel.trailingAnchor, constant: 10),
+        metricsView.leadingAnchor.constraint(
+          greaterThanOrEqualTo: nameLabel.trailingAnchor, constant: 10 * scale),
         metricsView.trailingAnchor.constraint(equalTo: trailingAnchor),
         metricsView.centerYAnchor.constraint(equalTo: centerYAnchor),
       ])
     } else {
       addSubview(valueLabel)
       NSLayoutConstraint.activate([
-        valueLabel.leadingAnchor.constraint(greaterThanOrEqualTo: nameLabel.trailingAnchor, constant: 10),
+        valueLabel.leadingAnchor.constraint(
+          greaterThanOrEqualTo: nameLabel.trailingAnchor, constant: 10 * scale),
         valueLabel.trailingAnchor.constraint(equalTo: trailingAnchor),
         valueLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
       ])
     }
 
     NSLayoutConstraint.activate([
-      heightAnchor.constraint(equalToConstant: RiverLayout.statusRowHeight),
+      heightAnchor.constraint(equalToConstant: RiverLayout.statusRowHeight * scale),
       iconPlate.leadingAnchor.constraint(equalTo: leadingAnchor),
       iconPlate.centerYAnchor.constraint(equalTo: centerYAnchor),
-      iconPlate.widthAnchor.constraint(equalToConstant: 26),
-      iconPlate.heightAnchor.constraint(equalToConstant: 26),
+      iconPlate.widthAnchor.constraint(equalToConstant: 26 * scale),
+      iconPlate.heightAnchor.constraint(equalToConstant: 26 * scale),
       iconView.centerXAnchor.constraint(equalTo: iconPlate.centerXAnchor),
       iconView.centerYAnchor.constraint(equalTo: iconPlate.centerYAnchor),
-      iconView.widthAnchor.constraint(equalToConstant: 14),
-      iconView.heightAnchor.constraint(equalToConstant: 14),
-      nameLabel.leadingAnchor.constraint(equalTo: iconPlate.trailingAnchor, constant: 10),
+      iconView.widthAnchor.constraint(equalToConstant: 14 * scale),
+      iconView.heightAnchor.constraint(equalToConstant: 14 * scale),
+      nameLabel.leadingAnchor.constraint(equalTo: iconPlate.trailingAnchor, constant: 10 * scale),
       nameLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
       divider.leadingAnchor.constraint(equalTo: nameLabel.leadingAnchor),
       divider.trailingAnchor.constraint(equalTo: trailingAnchor),
       divider.bottomAnchor.constraint(equalTo: bottomAnchor),
-      divider.heightAnchor.constraint(equalToConstant: 1),
+      divider.heightAnchor.constraint(equalToConstant: max(1, scale)),
     ])
 
     setAccessibilityElement(true)
@@ -682,6 +755,7 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     enum Target {
       case file(FileResult)
       case application(ApplicationResult)
+      case systemSetting(SystemSettingsResult)
       case calculation(CalculationResult)
       case quicklink(QuicklinkRequest)
       case pluginSuggestion(String)
@@ -728,6 +802,7 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
   private let stocks = StockLookup()
   private let dictionary = AHDLookup()
   private let applicationCatalog = ApplicationCatalog()
+  private let systemSettingsCatalog = SystemSettingsCatalog()
   private let knowledge: ResultKnowledge
   private let panel: LauncherPanel
   private let statusPanel: NSPanel
@@ -739,6 +814,7 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
   private let scrollView = NSScrollView()
   private let divider = NSView()
   private let fileIconCache = NSCache<NSString, NSImage>()
+  private var scaledConstraints: [(constraint: NSLayoutConstraint, baseConstant: CGFloat)] = []
   private var resultsVerticalConstraints: [NSLayoutConstraint] = []
   private var rows: [Row] = []
   private var statusSnapshots: [StatusPluginSnapshot] = []
@@ -748,6 +824,7 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
   private var selectionWasExplicit = false
   private var updatingSelection = false
   private var luckyStatusWorkItem: DispatchWorkItem?
+  private var uiScale: CGFloat
 
   init(
     configStore: ConfigStore,
@@ -755,16 +832,18 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     locationProvider: RiverLocationProvider,
     knowledge: ResultKnowledge = ResultKnowledge()
   ) {
+    let initialScale = RiverLayout.scale(for: configStore.value.textSize)
     self.configStore = configStore
     self.statusPlugins = statusPlugins
     self.locationProvider = locationProvider
     self.knowledge = knowledge
+    uiScale = initialScale
     panel = LauncherPanel(
       contentRect: NSRect(
         x: 0,
         y: 0,
-        width: RiverLayout.windowWidth,
-        height: RiverLayout.restingWindowHeight
+        width: RiverLayout.windowWidth(scale: initialScale),
+        height: RiverLayout.restingWindowHeight(scale: initialScale)
       ),
       styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
       backing: .buffered,
@@ -780,6 +859,9 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     fileIconCache.countLimit = 100
     configureWindow()
     configureContent()
+    panel.onTextSizeAdjustment = { [weak self] adjustment in
+      self?.adjustTextSize(by: adjustment)
+    }
     statusPlugins.onChange = { [weak self] snapshots in
       self?.setStatusPlugins(snapshots)
     }
@@ -787,6 +869,13 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
   }
 
   var isVisible: Bool { panel.isVisible }
+
+  func apply(config: AppConfig) {
+    let scale = RiverLayout.scale(for: config.textSize)
+    guard scale != uiScale else { return }
+    uiScale = scale
+    applyLayoutScale()
+  }
 
   func toggle() {
     isVisible ? dismiss() : show()
@@ -893,7 +982,7 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
   func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
 
   func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-    rows.indices.contains(row) ? rows[row].height : RiverLayout.rowHeight
+    scaled(rows.indices.contains(row) ? rows[row].height : RiverLayout.rowHeight)
   }
 
   func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView?
@@ -903,6 +992,7 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
       (tableView.makeView(withIdentifier: identifier, owner: self) as? ResultCellView)
       ?? ResultCellView()
     cell.identifier = identifier
+    cell.applyScale(uiScale)
     let item = rows[row]
     cell.configure(
       title: item.title,
@@ -916,15 +1006,21 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
   }
 
   func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
-    ResultRowView()
+    ResultRowView(scale: uiScale)
   }
 
   private func icon(for row: Row) -> NSImage? {
     switch row.target {
     case .application(let application):
-      return fileIcon(at: application.url.path, size: NSSize(width: 30, height: 30))
+      return fileIcon(
+        at: application.url.path,
+        size: NSSize(width: scaled(30), height: scaled(30))
+      )
     case .file(let file):
-      return fileIcon(at: file.path, size: NSSize(width: 28, height: 28))
+      return fileIcon(
+        at: file.path,
+        size: NSSize(width: scaled(28), height: scaled(28))
+      )
     default:
       return NSImage(systemSymbolName: row.symbolName, accessibilityDescription: nil)
     }
@@ -979,7 +1075,9 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     root.layer?.backgroundColor = NSColor.clear.cgColor
 
     surface.appearance = NSAppearance(named: .darkAqua)
-    surface.layer?.cornerRadius = RiverLayout.cornerRadius
+    surface.visualScale = uiScale
+    surface.layer?.cornerRadius = scaled(RiverLayout.cornerRadius)
+    surface.surfaceCornerRadius = scaled(RiverLayout.cornerRadius)
     if #available(macOS 10.15, *) { surface.layer?.cornerCurve = .continuous }
     surface.layer?.masksToBounds = false
     surface.layer?.borderWidth = 1
@@ -998,13 +1096,14 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
         alpha: 1
       ).cgColor
     surface.layer?.shadowOpacity = 0.46
-    surface.layer?.shadowRadius = 24
-    surface.layer?.shadowOffset = CGSize(width: 0, height: -6)
+    surface.layer?.shadowRadius = scaled(24)
+    surface.layer?.shadowOffset = CGSize(width: 0, height: scaled(-6))
     surface.translatesAutoresizingMaskIntoConstraints = false
 
     statusSurface.appearance = NSAppearance(named: .darkAqua)
-    statusSurface.surfaceCornerRadius = RiverLayout.statusCornerRadius
-    statusSurface.layer?.cornerRadius = RiverLayout.statusCornerRadius
+    statusSurface.visualScale = uiScale
+    statusSurface.surfaceCornerRadius = scaled(RiverLayout.statusCornerRadius)
+    statusSurface.layer?.cornerRadius = scaled(RiverLayout.statusCornerRadius)
     if #available(macOS 10.15, *) { statusSurface.layer?.cornerCurve = .continuous }
     statusSurface.layer?.masksToBounds = false
     statusSurface.layer?.borderWidth = 1
@@ -1021,8 +1120,8 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
       alpha: 1
     ).cgColor
     statusSurface.layer?.shadowOpacity = 0.26
-    statusSurface.layer?.shadowRadius = 14
-    statusSurface.layer?.shadowOffset = CGSize(width: 0, height: -3)
+    statusSurface.layer?.shadowRadius = scaled(14)
+    statusSurface.layer?.shadowOffset = CGSize(width: 0, height: scaled(-3))
     statusSurface.isHidden = true
     statusSurface.translatesAutoresizingMaskIntoConstraints = false
 
@@ -1034,7 +1133,7 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     statusSurface.addSubview(statusStack)
 
     input.placeholderString = nil
-    input.font = .systemFont(ofSize: 24, weight: .regular)
+    input.font = .systemFont(ofSize: scaled(24), weight: .regular)
     input.textColor = NSColor.white.withAlphaComponent(0.96)
     input.focusRingType = .none
     input.isBezeled = false
@@ -1085,61 +1184,99 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     statusPanel.contentView = statusRoot
 
     resultsVerticalConstraints = [
-      scrollView.topAnchor.constraint(
-        equalTo: divider.bottomAnchor, constant: RiverLayout.resultsTopInset),
-      scrollView.bottomAnchor.constraint(
-        equalTo: surface.bottomAnchor, constant: -RiverLayout.resultsBottomInset),
+      scaledConstraint(
+        scrollView.topAnchor.constraint(equalTo: divider.bottomAnchor),
+        baseConstant: RiverLayout.resultsTopInset
+      ),
+      scaledConstraint(
+        scrollView.bottomAnchor.constraint(equalTo: surface.bottomAnchor),
+        baseConstant: -RiverLayout.resultsBottomInset
+      ),
     ]
     NSLayoutConstraint.activate([
-      surface.leadingAnchor.constraint(
-        equalTo: root.leadingAnchor, constant: RiverLayout.glowInset),
-      surface.trailingAnchor.constraint(
-        equalTo: root.trailingAnchor,
-        constant: -RiverLayout.glowInset
+      scaledConstraint(
+        surface.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+        baseConstant: RiverLayout.glowInset
       ),
-      surface.topAnchor.constraint(equalTo: root.topAnchor, constant: RiverLayout.glowInset),
-      surface.bottomAnchor.constraint(
-        equalTo: root.bottomAnchor,
-        constant: -RiverLayout.glowInset
+      scaledConstraint(
+        surface.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+        baseConstant: -RiverLayout.glowInset
       ),
-      statusStack.leadingAnchor.constraint(
-        equalTo: statusSurface.leadingAnchor,
-        constant: RiverLayout.statusHorizontalPadding
+      scaledConstraint(
+        surface.topAnchor.constraint(equalTo: root.topAnchor),
+        baseConstant: RiverLayout.glowInset
       ),
-      statusStack.trailingAnchor.constraint(
-        equalTo: statusSurface.trailingAnchor,
-        constant: -RiverLayout.statusHorizontalPadding
+      scaledConstraint(
+        surface.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+        baseConstant: -RiverLayout.glowInset
       ),
-      statusStack.topAnchor.constraint(
-        equalTo: statusSurface.topAnchor, constant: RiverLayout.statusVerticalPadding),
-      statusStack.bottomAnchor.constraint(
-        equalTo: statusSurface.bottomAnchor, constant: -RiverLayout.statusVerticalPadding),
-      input.leadingAnchor.constraint(
-        equalTo: surface.leadingAnchor, constant: RiverLayout.inputPadding),
-      input.trailingAnchor.constraint(
-        equalTo: surface.trailingAnchor, constant: -RiverLayout.inputPadding),
-      input.topAnchor.constraint(
-        equalTo: surface.topAnchor, constant: RiverLayout.inputPadding),
-      input.bottomAnchor.constraint(
-        equalTo: divider.topAnchor, constant: -RiverLayout.inputPadding),
-      divider.leadingAnchor.constraint(equalTo: surface.leadingAnchor, constant: 18),
-      divider.trailingAnchor.constraint(equalTo: surface.trailingAnchor, constant: -18),
-      divider.topAnchor.constraint(
-        equalTo: surface.topAnchor, constant: RiverLayout.inputAreaHeight),
-      divider.heightAnchor.constraint(equalToConstant: RiverLayout.dividerHeight),
-      scrollView.leadingAnchor.constraint(equalTo: surface.leadingAnchor, constant: 10),
-      scrollView.trailingAnchor.constraint(equalTo: surface.trailingAnchor, constant: -10),
+      scaledConstraint(
+        statusStack.leadingAnchor.constraint(equalTo: statusSurface.leadingAnchor),
+        baseConstant: RiverLayout.statusHorizontalPadding
+      ),
+      scaledConstraint(
+        statusStack.trailingAnchor.constraint(equalTo: statusSurface.trailingAnchor),
+        baseConstant: -RiverLayout.statusHorizontalPadding
+      ),
+      scaledConstraint(
+        statusStack.topAnchor.constraint(equalTo: statusSurface.topAnchor),
+        baseConstant: RiverLayout.statusVerticalPadding
+      ),
+      scaledConstraint(
+        statusStack.bottomAnchor.constraint(equalTo: statusSurface.bottomAnchor),
+        baseConstant: -RiverLayout.statusVerticalPadding
+      ),
+      scaledConstraint(
+        input.leadingAnchor.constraint(equalTo: surface.leadingAnchor),
+        baseConstant: RiverLayout.inputPadding
+      ),
+      scaledConstraint(
+        input.trailingAnchor.constraint(equalTo: surface.trailingAnchor),
+        baseConstant: -RiverLayout.inputPadding
+      ),
+      scaledConstraint(
+        input.topAnchor.constraint(equalTo: surface.topAnchor),
+        baseConstant: RiverLayout.inputPadding
+      ),
+      scaledConstraint(
+        input.bottomAnchor.constraint(equalTo: divider.topAnchor),
+        baseConstant: -RiverLayout.inputPadding
+      ),
+      scaledConstraint(
+        divider.leadingAnchor.constraint(equalTo: surface.leadingAnchor), baseConstant: 18),
+      scaledConstraint(
+        divider.trailingAnchor.constraint(equalTo: surface.trailingAnchor), baseConstant: -18),
+      scaledConstraint(
+        divider.topAnchor.constraint(equalTo: surface.topAnchor),
+        baseConstant: RiverLayout.inputAreaHeight
+      ),
+      scaledConstraint(
+        divider.heightAnchor.constraint(equalToConstant: 0),
+        baseConstant: RiverLayout.dividerHeight
+      ),
+      scaledConstraint(
+        scrollView.leadingAnchor.constraint(equalTo: surface.leadingAnchor), baseConstant: 10),
+      scaledConstraint(
+        scrollView.trailingAnchor.constraint(equalTo: surface.trailingAnchor), baseConstant: -10),
     ])
 
     NSLayoutConstraint.activate([
-      statusSurface.leadingAnchor.constraint(
-        equalTo: statusRoot.leadingAnchor, constant: RiverLayout.statusGlowInset),
-      statusSurface.trailingAnchor.constraint(
-        equalTo: statusRoot.trailingAnchor, constant: -RiverLayout.statusGlowInset),
-      statusSurface.topAnchor.constraint(
-        equalTo: statusRoot.topAnchor, constant: RiverLayout.statusGlowInset),
-      statusSurface.bottomAnchor.constraint(
-        equalTo: statusRoot.bottomAnchor, constant: -RiverLayout.statusGlowInset),
+      scaledConstraint(
+        statusSurface.leadingAnchor.constraint(equalTo: statusRoot.leadingAnchor),
+        baseConstant: RiverLayout.statusGlowInset
+      ),
+      scaledConstraint(
+        statusSurface.trailingAnchor.constraint(equalTo: statusRoot.trailingAnchor),
+        baseConstant: -RiverLayout.statusGlowInset
+      ),
+      scaledConstraint(
+        statusSurface.topAnchor.constraint(equalTo: statusRoot.topAnchor),
+        baseConstant: RiverLayout.statusGlowInset
+      ),
+      scaledConstraint(
+        statusSurface.bottomAnchor.constraint(equalTo: statusRoot.bottomAnchor),
+        baseConstant: -RiverLayout.statusGlowInset
+      ),
     ])
   }
 
@@ -1418,8 +1555,8 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     }
 
     let exactApplication = applicationCatalog.exactMatch(named: text)
-    if exactApplication == nil, let calculation = Calculator.calculate(text)
-    {
+    let exactSetting = systemSettingsCatalog.exactMatch(named: text)
+    if exactApplication == nil, exactSetting == nil, let calculation = Calculator.calculate(text) {
       setRows(
         [
           Row(
@@ -1451,15 +1588,39 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
       limit: configStore.value.maxFileResults,
       preferredIdentifiers: preferredIdentifiers
     )
+    let settings = systemSettingsCatalog.matches(
+      text,
+      limit: configStore.value.maxFileResults,
+      preferredIdentifiers: preferredIdentifiers
+    )
     let appRows = applications.map {
       Row(title: $0.name, subtitle: $0.subtitle, action: "Open", target: .application($0))
     }
-    let firstIsLearned = applications.first.map {
-      preferredIdentifiers.contains($0.knowledgeIdentifier)
-    } ?? false
+    let settingRows = settings.map {
+      Row(
+        title: $0.name,
+        subtitle: "System Settings",
+        symbolName: "gearshape",
+        action: "Open",
+        target: .systemSetting($0)
+      )
+    }
+    let orderedRows =
+      exactApplication != nil && exactSetting == nil
+      ? appRows + settingRows
+      : settingRows + appRows
+    let resultRows = Array(orderedRows.prefix(configStore.value.maxFileResults))
+    let firstIdentifier: String? = resultRows.first.flatMap { row in
+      switch row.target {
+      case .application(let application): return application.knowledgeIdentifier
+      case .systemSetting(let setting): return setting.knowledgeIdentifier
+      default: return nil
+      }
+    }
+    let firstIsLearned = firstIdentifier.map(preferredIdentifiers.contains) ?? false
     setRows(
-      appRows,
-      selectFirst: exactApplication != nil || firstIsLearned
+      resultRows,
+      selectFirst: exactApplication != nil || exactSetting != nil || firstIsLearned
     )
   }
 
@@ -1553,6 +1714,66 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     return names
   }
 
+  private func scaled(_ value: CGFloat) -> CGFloat {
+    RiverLayout.scaled(value, by: uiScale)
+  }
+
+  private func scaledConstraint(
+    _ constraint: NSLayoutConstraint, baseConstant: CGFloat
+  ) -> NSLayoutConstraint {
+    constraint.constant = scaled(baseConstant)
+    scaledConstraints.append((constraint, baseConstant))
+    return constraint
+  }
+
+  private func adjustTextSize(by adjustment: Int) {
+    do {
+      try configStore.setTextSize(configStore.value.textSize + adjustment)
+      apply(config: configStore.value)
+    } catch {
+      NSSound.beep()
+      fputs("river: could not save text_size: \(error.localizedDescription)\n", stderr)
+    }
+  }
+
+  private func applyLayoutScale() {
+    for item in scaledConstraints {
+      item.constraint.constant = scaled(item.baseConstant)
+    }
+
+    input.font = .systemFont(ofSize: scaled(24), weight: .regular)
+    if let editor = panel.fieldEditor(false, for: input) as? NSTextView {
+      editor.font = input.font
+    }
+
+    surface.visualScale = uiScale
+    surface.surfaceCornerRadius = scaled(RiverLayout.cornerRadius)
+    surface.layer?.cornerRadius = scaled(RiverLayout.cornerRadius)
+    surface.layer?.borderWidth = max(1, scaled(1))
+    surface.layer?.shadowRadius = scaled(24)
+    surface.layer?.shadowOffset = CGSize(width: 0, height: scaled(-6))
+
+    statusSurface.visualScale = uiScale
+    statusSurface.surfaceCornerRadius = scaled(RiverLayout.statusCornerRadius)
+    statusSurface.layer?.cornerRadius = scaled(RiverLayout.statusCornerRadius)
+    statusSurface.layer?.borderWidth = max(1, scaled(1))
+    statusSurface.layer?.shadowRadius = scaled(14)
+    statusSurface.layer?.shadowOffset = CGSize(width: 0, height: scaled(-3))
+
+    rebuildStatusPluginViews()
+    let selectedRows = table.selectedRowIndexes
+    updatingSelection = true
+    table.reloadData()
+    table.selectRowIndexes(selectedRows, byExtendingSelection: false)
+    updatingSelection = false
+    resize(for: rows.map(\.height), display: false)
+    positionOnActiveScreen()
+    panel.contentView?.layoutSubtreeIfNeeded()
+    statusPanel.contentView?.layoutSubtreeIfNeeded()
+    panel.displayIfNeeded()
+    statusPanel.displayIfNeeded()
+  }
+
   private func setRows(_ newRows: [Row], selectFirst: Bool = false) {
     rows = newRows
     setResultsVisible(false)
@@ -1587,18 +1808,7 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     let wasVisible = !statusSnapshots.isEmpty
     statusSnapshots = snapshots
 
-    for view in statusStack.arrangedSubviews {
-      statusStack.removeArrangedSubview(view)
-      view.removeFromSuperview()
-    }
-    for (index, snapshot) in snapshots.enumerated() {
-      let row = StatusPluginRowView(
-        snapshot: snapshot,
-        showsDivider: index < snapshots.count - 1
-      )
-      statusStack.addArrangedSubview(row)
-      row.widthAnchor.constraint(equalTo: statusStack.widthAnchor).isActive = true
-    }
+    rebuildStatusPluginViews()
 
     let isVisible = !snapshots.isEmpty
     statusSurface.isHidden = !isVisible
@@ -1614,10 +1824,26 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     }
   }
 
+  private func rebuildStatusPluginViews() {
+    for view in statusStack.arrangedSubviews {
+      statusStack.removeArrangedSubview(view)
+      view.removeFromSuperview()
+    }
+    for (index, snapshot) in statusSnapshots.enumerated() {
+      let row = StatusPluginRowView(
+        snapshot: snapshot,
+        showsDivider: index < statusSnapshots.count - 1,
+        scale: uiScale
+      )
+      statusStack.addArrangedSubview(row)
+      row.widthAnchor.constraint(equalTo: statusStack.widthAnchor).isActive = true
+    }
+  }
+
   private func resize(for rowHeights: [CGFloat], display: Bool = true) {
     let oldTop = panel.frame.maxY
-    let surfaceHeight = RiverLayout.surfaceHeight(for: rowHeights)
-    let height = surfaceHeight + RiverLayout.glowInset * 2
+    let surfaceHeight = RiverLayout.surfaceHeight(for: rowHeights, scale: uiScale)
+    let height = surfaceHeight + scaled(RiverLayout.glowInset * 2)
     var frame = panel.frame
     frame.size.height = height
     frame.origin.y = oldTop - height
@@ -1630,7 +1856,7 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     let screen = activeScreen()
     guard let visible = screen?.visibleFrame else { return }
     var frame = panel.frame
-    frame.size.width = min(RiverLayout.windowWidth, visible.width - 32)
+    frame.size.width = min(RiverLayout.windowWidth(scale: uiScale), visible.width - scaled(32))
     frame.origin.x = visible.midX - frame.width / 2
     let targetCenterY = visible.minY + visible.height * 0.62
     frame.origin.y = targetCenterY - frame.height / 2
@@ -1647,13 +1873,15 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
     guard !statusSnapshots.isEmpty, let visible = (screen ?? activeScreen())?.visibleFrame else {
       return
     }
-    let surfaceHeight = RiverLayout.statusSurfaceHeight(for: statusSnapshots.count)
-    let width = RiverLayout.statusSurfaceWidth + RiverLayout.statusGlowInset * 2
-    let height = surfaceHeight + RiverLayout.statusGlowInset * 2
+    let surfaceHeight = RiverLayout.statusSurfaceHeight(
+      for: statusSnapshots.count, scale: uiScale)
+    let glowInset = scaled(RiverLayout.statusGlowInset)
+    let screenMargin = scaled(RiverLayout.statusScreenMargin)
+    let width = scaled(RiverLayout.statusSurfaceWidth) + glowInset * 2
+    let height = surfaceHeight + glowInset * 2
     let frame = NSRect(
-      x: visible.minX + RiverLayout.statusScreenMargin - RiverLayout.statusGlowInset,
-      y: visible.maxY - RiverLayout.statusScreenMargin - surfaceHeight
-        - RiverLayout.statusGlowInset,
+      x: visible.minX + screenMargin - glowInset,
+      y: visible.maxY - screenMargin - surfaceHeight - glowInset,
       width: width,
       height: height
     )
@@ -1757,6 +1985,12 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
       }
     }
 
+    if let exactSetting = systemSettingsCatalog.exactMatch(named: text) {
+      knowledge.record(query: text, itemIdentifier: exactSetting.knowledgeIdentifier)
+      open(exactSetting)
+      return
+    }
+
     if let exactApplication = applicationCatalog.exactMatch(named: text) {
       knowledge.record(query: text, itemIdentifier: exactApplication.knowledgeIdentifier)
       open(exactApplication)
@@ -1784,6 +2018,18 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
       if selectionWasExplicit || isLearnedSelection {
         knowledge.record(query: text, itemIdentifier: application.knowledgeIdentifier)
         open(application)
+        return
+      }
+    }
+
+    if rows.indices.contains(selectedIndex),
+      case .systemSetting(let setting)? = rows[selectedIndex].target
+    {
+      let isLearnedSelection = knowledge.hasPreference(
+        for: text, itemIdentifier: setting.knowledgeIdentifier)
+      if selectionWasExplicit || isLearnedSelection {
+        knowledge.record(query: text, itemIdentifier: setting.knowledgeIdentifier)
+        open(setting)
         return
       }
     }
@@ -1836,6 +2082,12 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
       configuration: configuration,
       completionHandler: nil
     )
+    dismiss()
+  }
+
+  private func open(_ setting: SystemSettingsResult) {
+    guard let url = setting.url else { return }
+    NSWorkspace.shared.open(url)
     dismiss()
   }
 

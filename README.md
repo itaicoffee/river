@@ -37,6 +37,7 @@ To update, run the one-line installer again. Your configuration and plugins are 
 | --- | --- |
 | Exact app name + Return | Opens the app (case-insensitive) |
 | Fuzzy app name + arrows + Return | Opens the selected matching app |
+| `displays`, `bluetooth`, etc. | Opens the matching native System Settings pane |
 | `'filename` | Fuzzy-searches indexed files and folders; Return opens one, Shift-Return reveals it in Finder |
 | `2 + 3 * 4` | Shows the answer live; Return copies it |
 | `15% of 80` | Calculates percentages |
@@ -58,8 +59,9 @@ To update, run the one-line installer again. Your configuration and plugins are 
 | `shut down` | Shuts down the Mac |
 | `lock` | Locks the screen |
 
-Use the arrow keys to choose a result, Return to open it, and Escape to close River. Clicking
-elsewhere also hides it.
+Use the arrow keys to choose a result, Return to open it, and Escape to close River. While River is
+open, Command-Plus and Command-Minus resize the launcher and status-plugin panel together and save
+the new size to the config. Clicking elsewhere also hides it.
 
 ## How it works
 
@@ -70,8 +72,8 @@ River is a small Swift executable built directly on AppKit, Carbon, and Core Ser
 2. Carbon registers the global hotkey. Pressing it shows a native `NSPanel` and focuses its text
    field.
 3. As you type, River resolves local actions in priority order: commands, calculations, Quicklinks,
-   applications, indexed files, definitions, and plugins. A remaining query becomes a browser
-   search when you press Return.
+   applications, native System Settings panes, indexed files, definitions, and plugins. A remaining
+   query becomes a browser search when you press Return.
 4. File search uses a persisted local index with fuzzy basename and path-token matching, then merges
    any available Spotlight candidates. River remembers recent selections for four weeks so repeated
    queries put the result you actually use first.
@@ -87,6 +89,7 @@ River creates `~/.config/river/config` on first install and applies changes with
 
 ```ini
 hotkey = cmd+shift+space
+text_size = 24
 search_url = https://www.google.com/search?q={query}
 lucky_url = https://www.google.com/search?btnI=1&q={query}
 plugin_dir = ~/.config/river/plugins
@@ -97,7 +100,8 @@ max_file_results = 5
 ```
 
 Supported hotkey keys are letters, digits, and `space`; modifiers are `ctrl`, `cmd`, `opt`, and
-`shift`. Web links open in the default browser configured in macOS.
+`shift`. `text_size` accepts 12 through 48 and proportionally scales all text and geometry in both
+River panels. Web links open in the default browser configured in macOS.
 
 ### Quicklinks
 

@@ -52,7 +52,7 @@ To update, run the one-line installer again. Your configuration and plugins are 
 | Anything else | Searches with the configured browser and search engine |
 | `>` or `> settings` | Browses or filters the command center |
 | `/` or `/we` | Lists all plugins or filters them by name |
-| `/weather`, `/uv`, `/watts` | Runs one of River's bundled example plugins |
+| `/weather`, `/rain`, `/uv`, `/watts` | Runs one of River's bundled example plugins |
 | `river settings` | Opens the live config in Terminal with `nvim` |
 | `river restart` | Restarts the background launcher |
 | `restart` | Restarts the Mac |
@@ -148,10 +148,12 @@ Then make it executable:
 chmod +x ~/.config/river/plugins/hello
 ```
 
-Typing `/hello friend` now displays `hello friend`. The installer seeds `uv`, `weather`, and `watts`
-the same way and never overwrites a plugin you edit. Weather and UV use macOS Core Location and
-Open-Meteo for your current coordinates, while watts reads the power-adapter information published
-by macOS. The installer also schedules these three plugins for the status rectangle by default.
+Typing `/hello friend` now displays `hello friend`. The installer seeds `weather`, `rain`, `uv`, and
+`watts` the same way and never overwrites a plugin you edit. Weather, Rain, and UV use macOS Core
+Location and Open-Meteo for your current coordinates, while watts reads the power-adapter
+information published by macOS. Rain shows today's next start time and intensity or duration; when
+today is dry, it shows the next rainy weekday. The installer also schedules these four plugins for
+the status rectangle by default.
 
 ### Status plugins
 
@@ -159,6 +161,7 @@ Add a refresh interval to an executable plugin's filename to turn it into a stat
 
 ```text
 weather.10m.zsh
+rain.15m.zsh
 stocks.30s.sh
 watts.10s.zsh
 uv.15m.zsh
@@ -184,8 +187,8 @@ launching, file search, calculations, unit conversions, and power status are loc
 
 Network requests happen only when an action needs them: web and Lucky searches go to the configured
 search engine, `ai` and `work` open ChatGPT, stock quotes come from Yahoo Finance, definitions come
-from the American Heritage Dictionary, and the bundled weather/UV plugins call Open-Meteo with coordinates from
-Core Location. Status plugins run on
+from the American Heritage Dictionary, and the bundled weather/rain/UV plugins call Open-Meteo with
+coordinates from Core Location. Status plugins run on
 their filename schedule even while River is hidden. Plugins are programs on your machine and run
 with your user permissions, so only install plugins you trust.
 

@@ -167,9 +167,9 @@ enum Installer {
       "LSUIElement": true,
       "NSHighResolutionCapable": true,
       "NSLocationUsageDescription":
-        "River uses your location to refresh local weather and UV status plugins.",
+        "River uses your location to refresh local weather, rain, and UV status plugins.",
       "NSLocationWhenInUseUsageDescription":
-        "River uses your location to refresh local weather and UV status plugins.",
+        "River uses your location to refresh local weather, rain, and UV status plugins.",
       "NSPrincipalClass": "NSApplication",
     ]
   }
@@ -311,6 +311,7 @@ enum Installer {
 
   static let defaultStatusPluginNames = [
     "010-weather.10m.zsh",
+    "015-rain.15m.zsh",
     "020-uv.15m.zsh",
     "030-watts.10s.zsh",
     "040-wifi.30s.zsh",
@@ -358,6 +359,24 @@ enum Installer {
     else
       print "Weather unavailable"
     fi
+    """
+
+  static let rainPlugin = """
+    #!/bin/zsh
+    if [[ -z "$RIVER_LATITUDE" || -z "$RIVER_LONGITUDE" ]]; then
+      print "Rain unavailable"
+      exit 0
+    fi
+    payload=$(/usr/bin/curl -fsS --max-time 4 \
+      "https://api.open-meteo.com/v1/forecast?latitude=${RIVER_LATITUDE}&longitude=${RIVER_LONGITUDE}&hourly=precipitation_probability,rain,showers,weather_code&current=weather_code&forecast_days=16&timezone=auto" \
+      2>/dev/null)
+    helper=${RIVER_EXECUTABLE:-$HOME/.local/bin/river}
+    if [[ -z "$payload" || ! -x "$helper" ]]; then
+      print "Rain unavailable"
+      exit 0
+    fi
+    summary=$(print -r -- "$payload" | "$helper" rain-summary 2>/dev/null)
+    print -- "${summary:-Rain unavailable}"
     """
 
   static let legacyUVPlugin = """
@@ -583,6 +602,7 @@ enum Installer {
     """
 
   private static let defaultPlugins: [String: String] = [
+    "rain": rainPlugin,
     "uv": uvPlugin,
     "weather": weatherPlugin,
     "watts": """
@@ -601,6 +621,10 @@ enum Installer {
     "010-weather.10m.zsh": """
     #!/bin/zsh
     exec "${0:A:h}/weather"
+    """,
+    "015-rain.15m.zsh": """
+    #!/bin/zsh
+    exec "${0:A:h}/rain"
     """,
     "020-uv.15m.zsh": """
     #!/bin/zsh

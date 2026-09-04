@@ -412,6 +412,7 @@ enum StatusPluginPresentation {
 
     if name.contains("date") || name.contains("calendar") { return "calendar" }
     if name.contains("weather") { return "sun.max.fill" }
+    if name.contains("rain") { return "cloud.rain.fill" }
     if name == "uv" || name.contains("ultraviolet") {
       return "sun.max.trianglebadge.exclamationmark.fill"
     }
@@ -722,6 +723,9 @@ private final class StatusPluginRowView: NSView {
     }
     if normalized.contains("weather") {
       return NSColor(calibratedRed: 1.00, green: 0.67, blue: 0.24, alpha: 1)
+    }
+    if normalized.contains("rain") {
+      return NSColor(calibratedRed: 0.35, green: 0.68, blue: 1.00, alpha: 1)
     }
     if normalized == "uv" || normalized.contains("ultraviolet") {
       return NSColor(calibratedRed: 0.75, green: 0.50, blue: 1.00, alpha: 1)

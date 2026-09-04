@@ -3,6 +3,28 @@ import XCTest
 @testable import River
 
 final class RiverTests: XCTestCase {
+  private func rainForecastData(
+    current: String,
+    times: [String],
+    probabilities: [Double],
+    rain: [Double],
+    showers: [Double]? = nil,
+    codes: [Int]
+  ) throws -> Data {
+    try JSONSerialization.data(withJSONObject: [
+      "timezone": "Europe/London",
+      "utc_offset_seconds": 3_600,
+      "current": ["time": current],
+      "hourly": [
+        "time": times,
+        "precipitation_probability": probabilities,
+        "rain": rain,
+        "showers": showers ?? Array(repeating: 0, count: times.count),
+        "weather_code": codes,
+      ],
+    ])
+  }
+
   func testConfigParsingAndUnknownKeys() {
     let config = AppConfig.parse(
       """
@@ -605,6 +627,7 @@ final class RiverTests: XCTestCase {
       Installer.defaultStatusPluginNames,
       [
         "010-weather.10m.zsh",
+        "015-rain.15m.zsh",
         "020-uv.15m.zsh",
         "030-watts.10s.zsh",
         "040-wifi.30s.zsh",
@@ -615,7 +638,7 @@ final class RiverTests: XCTestCase {
       Installer.defaultStatusPluginNames.compactMap {
         StatusPluginDescriptor(filename: $0, directory: "/plugins")?.displayName
       },
-      ["weather", "uv", "watts", "wifi", "speedtest"]
+      ["weather", "rain", "uv", "watts", "wifi", "speedtest"]
     )
   }
 
@@ -642,6 +665,10 @@ final class RiverTests: XCTestCase {
     }
 
     XCTAssertEqual(StatusPluginPresentation.symbolName(for: snapshot("wifi")), "wifi")
+    XCTAssertEqual(
+      StatusPluginPresentation.symbolName(for: snapshot("rain")),
+      "cloud.rain.fill"
+    )
     XCTAssertEqual(
       StatusPluginPresentation.symbolName(for: snapshot("codex-context")),
       "brain.head.profile"
@@ -711,6 +738,64 @@ final class RiverTests: XCTestCase {
     XCTAssertTrue(Installer.uvPlugin.contains("api.open-meteo.com"))
     XCTAssertFalse(Installer.uvPlugin.contains("wttr.in"))
     XCTAssertTrue(Installer.legacyUVPlugin.contains("wttr.in"))
+  }
+
+  func testBundledRainUsesDynamicRiverCoordinatesAndHourlyRainData() {
+    XCTAssertTrue(Installer.rainPlugin.contains("RIVER_LATITUDE"))
+    XCTAssertTrue(Installer.rainPlugin.contains("RIVER_LONGITUDE"))
+    XCTAssertTrue(Installer.rainPlugin.contains("precipitation_probability,rain,showers"))
+    XCTAssertTrue(Installer.rainPlugin.contains("forecast_days=16"))
+    XCTAssertTrue(Installer.rainPlugin.contains("api.open-meteo.com"))
+  }
+
+  func testRainForecastDescribesDrizzleStartingToday() throws {
+    let data = try rainForecastData(
+      current: "2026-09-04T10:15",
+      times: ["2026-09-04T15:00", "2026-09-04T16:00"],
+      probabilities: [75, 80],
+      rain: [0.2, 0.3],
+      codes: [51, 53]
+    )
+    XCTAssertEqual(RainForecast.summary(from: data), "3PM (drizzle)")
+  }
+
+  func testRainForecastDescribesDurationAndPouringToday() throws {
+    let duration = try rainForecastData(
+      current: "2026-09-04T10:15",
+      times: [
+        "2026-09-04T15:00", "2026-09-04T16:00", "2026-09-04T17:00",
+        "2026-09-04T18:00",
+      ],
+      probabilities: [80, 80, 75, 70],
+      rain: [1, 1.4, 1.2, 0.8],
+      codes: [61, 61, 63, 61]
+    )
+    XCTAssertEqual(RainForecast.summary(from: duration), "3PM (4 hours)")
+
+    let pouring = try rainForecastData(
+      current: "2026-09-04T10:15",
+      times: ["2026-09-04T15:00", "2026-09-04T16:00"],
+      probabilities: [90, 95],
+      rain: [2, 5],
+      codes: [63, 65]
+    )
+    XCTAssertEqual(RainForecast.summary(from: pouring), "3PM (pouring)")
+  }
+
+  func testRainForecastNamesTheNextRainyDayWhenTodayIsDry() throws {
+    let data = try rainForecastData(
+      current: "2026-09-04T10:15",
+      times: [
+        "2026-09-04T15:00", "2026-09-05T08:00", "2026-09-05T09:00",
+      ],
+      probabilities: [5, 70, 80],
+      rain: [0, 0.8, 1.1],
+      codes: [1, 61, 61]
+    )
+    XCTAssertEqual(
+      RainForecast.summary(from: data, locale: Locale(identifier: "en_GB")),
+      "Saturday"
+    )
   }
 
   func testBundledWiFiUsesLinkStateWhenSSIDIsPrivacyProtected() {

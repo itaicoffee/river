@@ -394,7 +394,8 @@ final class StatusPluginManager {
 
   private static func usesLocation(_ descriptor: StatusPluginDescriptor) -> Bool {
     let name = descriptor.displayName.lowercased()
-    return name.contains("weather") || name == "uv" || name.contains("ultraviolet")
+    return name.contains("weather") || name.contains("rain") || name == "uv"
+      || name.contains("ultraviolet")
   }
 
   private func publishIfNeeded() {

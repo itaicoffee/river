@@ -78,6 +78,9 @@ case "uninstall":
   }
 case "config":
   print(Paths.configFile)
+case "rain-summary":
+  let data = FileHandle.standardInput.readDataToEndOfFile()
+  print(RainForecast.summary(from: data) ?? "Rain unavailable")
 case "search-diagnose":
   let query = CommandLine.arguments.dropFirst(2).joined(separator: " ")
     .trimmingCharacters(in: .whitespacesAndNewlines)

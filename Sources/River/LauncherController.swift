@@ -40,15 +40,21 @@ private final class LauncherPanel: NSPanel {
   }
 }
 
+/// Panel chrome for the launcher and status surfaces.
+/// On macOS 26+ this uses Apple's Liquid Glass (`NSGlassEffectView`); on earlier
+/// systems it keeps the legacy dark gradient + border glow.
 private final class GlowView: NSView {
+  private let contentHost = NSView()
   private let gradient = CAGradientLayer()
+  private var glassEffectView: NSView?
   private var isThinking = false
+  private var installsGlassChrome = false
+
+  var usesLiquidGlass: Bool { installsGlassChrome }
+
   var visualScale: CGFloat = 1
   var surfaceCornerRadius = RiverLayout.cornerRadius {
-    didSet {
-      layer?.cornerRadius = surfaceCornerRadius
-      needsLayout = true
-    }
+    didSet { applySurfaceCornerRadius() }
   }
 
   private let restingBorderColor = NSColor(
@@ -58,22 +64,84 @@ private final class GlowView: NSView {
     alpha: 0.44
   ).cgColor
 
+  private let restingGlassTint = NSColor(
+    calibratedRed: 0.06,
+    green: 0.12,
+    blue: 0.22,
+    alpha: 0.42
+  )
+
+  private let thinkingGlassTint = NSColor(
+    calibratedRed: 0.12,
+    green: 0.36,
+    blue: 0.62,
+    alpha: 0.55
+  )
+
   override init(frame frameRect: NSRect) {
     super.init(frame: frameRect)
     wantsLayer = true
-    gradient.colors = [
-      NSColor(calibratedRed: 0.075, green: 0.090, blue: 0.125, alpha: 1).cgColor,
-      NSColor(calibratedRed: 0.025, green: 0.032, blue: 0.050, alpha: 1).cgColor,
-    ]
-    gradient.startPoint = CGPoint(x: 0.08, y: 1)
-    gradient.endPoint = CGPoint(x: 0.92, y: 0)
-    layer?.insertSublayer(gradient, at: 0)
+    contentHost.wantsLayer = true
+    contentHost.translatesAutoresizingMaskIntoConstraints = false
+
+    if #available(macOS 26.0, *) {
+      installsGlassChrome = true
+      let glass = NSGlassEffectView(frame: .zero)
+      glass.style = .regular
+      glass.cornerRadius = surfaceCornerRadius
+      glass.tintColor = restingGlassTint
+      glass.contentView = contentHost
+      glass.translatesAutoresizingMaskIntoConstraints = false
+      glassEffectView = glass
+      super.addSubview(glass)
+      NSLayoutConstraint.activate([
+        glass.leadingAnchor.constraint(equalTo: leadingAnchor),
+        glass.trailingAnchor.constraint(equalTo: trailingAnchor),
+        glass.topAnchor.constraint(equalTo: topAnchor),
+        glass.bottomAnchor.constraint(equalTo: bottomAnchor),
+      ])
+    } else {
+      gradient.colors = [
+        NSColor(calibratedRed: 0.075, green: 0.090, blue: 0.125, alpha: 1).cgColor,
+        NSColor(calibratedRed: 0.025, green: 0.032, blue: 0.050, alpha: 1).cgColor,
+      ]
+      gradient.startPoint = CGPoint(x: 0.08, y: 1)
+      gradient.endPoint = CGPoint(x: 0.92, y: 0)
+      layer?.insertSublayer(gradient, at: 0)
+      super.addSubview(contentHost)
+      NSLayoutConstraint.activate([
+        contentHost.leadingAnchor.constraint(equalTo: leadingAnchor),
+        contentHost.trailingAnchor.constraint(equalTo: trailingAnchor),
+        contentHost.topAnchor.constraint(equalTo: topAnchor),
+        contentHost.bottomAnchor.constraint(equalTo: bottomAnchor),
+      ])
+    }
   }
 
   required init?(coder: NSCoder) { nil }
 
+  override func addSubview(_ view: NSView) {
+    // Route caller content into the glass/legacy content host so Liquid Glass
+    // wraps the launcher UI rather than sitting behind an opaque gradient.
+    if view === glassEffectView || view === contentHost {
+      super.addSubview(view)
+    } else {
+      contentHost.addSubview(view)
+    }
+  }
+
+  private func applySurfaceCornerRadius() {
+    if #available(macOS 26.0, *), let glass = glassEffectView as? NSGlassEffectView {
+      glass.cornerRadius = surfaceCornerRadius
+    }
+    layer?.cornerRadius = surfaceCornerRadius
+    needsLayout = true
+  }
+
   override func layout() {
     super.layout()
+
+    guard !installsGlassChrome else { return }
 
     // The launcher changes height as its result mode changes. Keep the backing
     // layers in lockstep with the view so Core Animation does not interpolate
@@ -92,8 +160,19 @@ private final class GlowView: NSView {
   }
 
   func startThinking() {
-    guard !isThinking, let layer else { return }
+    guard !isThinking else { return }
     isThinking = true
+
+    if #available(macOS 26.0, *), let glass = glassEffectView as? NSGlassEffectView {
+      if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+        glass.tintColor = thinkingGlassTint
+        return
+      }
+      pulseGlassThinking(glass)
+      return
+    }
+
+    guard let layer else { return }
 
     if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
       CATransaction.begin()
@@ -140,9 +219,40 @@ private final class GlowView: NSView {
     layer.add(border, forKey: "river.thinking.border")
   }
 
+  @available(macOS 26.0, *)
+  private func pulseGlassThinking(_ glass: NSGlassEffectView) {
+    guard isThinking else { return }
+    NSAnimationContext.runAnimationGroup { context in
+      context.duration = 0.7
+      context.allowsImplicitAnimation = true
+      glass.animator().tintColor = thinkingGlassTint
+    } completionHandler: { [weak self] in
+      guard let self, self.isThinking else { return }
+      NSAnimationContext.runAnimationGroup { context in
+        context.duration = 0.7
+        context.allowsImplicitAnimation = true
+        glass.animator().tintColor = self.restingGlassTint
+      } completionHandler: { [weak self] in
+        guard let self, self.isThinking else { return }
+        self.pulseGlassThinking(glass)
+      }
+    }
+  }
+
   func stopThinking() {
-    guard let layer else { return }
+
     isThinking = false
+
+    if #available(macOS 26.0, *), let glass = glassEffectView as? NSGlassEffectView {
+      NSAnimationContext.runAnimationGroup { context in
+        context.duration = 0.2
+        context.allowsImplicitAnimation = true
+        glass.animator().tintColor = restingGlassTint
+      }
+      return
+    }
+
+    guard let layer else { return }
     layer.removeAnimation(forKey: "river.thinking.opacity")
     layer.removeAnimation(forKey: "river.thinking.radius")
     layer.removeAnimation(forKey: "river.thinking.border")
@@ -153,6 +263,39 @@ private final class GlowView: NSView {
     layer.shadowOpacity = 0.46
     layer.shadowRadius = 24 * visualScale
     CATransaction.commit()
+  }
+
+  func applyLegacyChrome(borderAlpha: CGFloat, shadowOpacity: Float, shadowRadius: CGFloat, shadowOffsetY: CGFloat) {
+    guard !installsGlassChrome else {
+      // Liquid Glass supplies its own edge and depth; skip painted borders/shadows.
+      layer?.borderWidth = 0
+      layer?.shadowOpacity = 0
+      return
+    }
+    layer?.masksToBounds = false
+    layer?.borderWidth = 1
+    layer?.borderColor = NSColor(
+      calibratedRed: 0.28,
+      green: 0.55,
+      blue: 0.82,
+      alpha: borderAlpha
+    ).cgColor
+    layer?.shadowColor = NSColor(
+      calibratedRed: 0.02,
+      green: 0.25,
+      blue: 0.55,
+      alpha: 1
+    ).cgColor
+    layer?.shadowOpacity = shadowOpacity
+    layer?.shadowRadius = shadowRadius
+    layer?.shadowOffset = CGSize(width: 0, height: shadowOffsetY)
+  }
+
+  func updateLegacyChromeScale(borderWidth: CGFloat, shadowRadius: CGFloat, shadowOffsetY: CGFloat) {
+    guard !installsGlassChrome else { return }
+    layer?.borderWidth = borderWidth
+    layer?.shadowRadius = shadowRadius
+    layer?.shadowOffset = CGSize(width: 0, height: shadowOffsetY)
   }
 }
 
@@ -365,16 +508,26 @@ private final class ResultRowView: NSTableRowView {
   override func drawSelection(in dirtyRect: NSRect) {}
 
   private func updateAppearance() {
+    let onGlass: Bool
+    if #available(macOS 26.0, *) {
+      onGlass = true
+    } else {
+      onGlass = false
+    }
+
     if isSelected {
+      // Slightly stronger fill on Liquid Glass so the selection still reads on
+      // a translucent panel; legacy opaque chrome keeps the prior look.
       layer?.backgroundColor = NSColor(
-        calibratedRed: 0.12, green: 0.42, blue: 0.72, alpha: 0.42
+        calibratedRed: 0.12, green: 0.42, blue: 0.72, alpha: onGlass ? 0.52 : 0.42
       ).cgColor
       layer?.borderWidth = 1
       layer?.borderColor = NSColor(
-        calibratedRed: 0.34, green: 0.68, blue: 1, alpha: 0.32
+        calibratedRed: 0.34, green: 0.68, blue: 1, alpha: onGlass ? 0.42 : 0.32
       ).cgColor
     } else {
-      layer?.backgroundColor = NSColor.white.withAlphaComponent(isHovered ? 0.065 : 0).cgColor
+      let hoverAlpha: CGFloat = onGlass ? 0.10 : 0.065
+      layer?.backgroundColor = NSColor.white.withAlphaComponent(isHovered ? hoverAlpha : 0).cgColor
       layer?.borderWidth = 0
     }
   }
@@ -1103,52 +1256,26 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
 
     surface.appearance = NSAppearance(named: .darkAqua)
     surface.visualScale = uiScale
-    surface.layer?.cornerRadius = scaled(RiverLayout.cornerRadius)
     surface.surfaceCornerRadius = scaled(RiverLayout.cornerRadius)
     if #available(macOS 10.15, *) { surface.layer?.cornerCurve = .continuous }
-    surface.layer?.masksToBounds = false
-    surface.layer?.borderWidth = 1
-    surface.layer?.borderColor =
-      NSColor(
-        calibratedRed: 0.28,
-        green: 0.55,
-        blue: 0.82,
-        alpha: 0.44
-      ).cgColor
-    surface.layer?.shadowColor =
-      NSColor(
-        calibratedRed: 0.02,
-        green: 0.25,
-        blue: 0.55,
-        alpha: 1
-      ).cgColor
-    surface.layer?.shadowOpacity = 0.46
-    surface.layer?.shadowRadius = scaled(24)
-    surface.layer?.shadowOffset = CGSize(width: 0, height: scaled(-6))
+    surface.applyLegacyChrome(
+      borderAlpha: 0.44,
+      shadowOpacity: 0.46,
+      shadowRadius: scaled(24),
+      shadowOffsetY: scaled(-6)
+    )
     surface.translatesAutoresizingMaskIntoConstraints = false
 
     statusSurface.appearance = NSAppearance(named: .darkAqua)
     statusSurface.visualScale = uiScale
     statusSurface.surfaceCornerRadius = scaled(RiverLayout.statusCornerRadius)
-    statusSurface.layer?.cornerRadius = scaled(RiverLayout.statusCornerRadius)
     if #available(macOS 10.15, *) { statusSurface.layer?.cornerCurve = .continuous }
-    statusSurface.layer?.masksToBounds = false
-    statusSurface.layer?.borderWidth = 1
-    statusSurface.layer?.borderColor = NSColor(
-      calibratedRed: 0.28,
-      green: 0.55,
-      blue: 0.82,
-      alpha: 0.30
-    ).cgColor
-    statusSurface.layer?.shadowColor = NSColor(
-      calibratedRed: 0.02,
-      green: 0.25,
-      blue: 0.55,
-      alpha: 1
-    ).cgColor
-    statusSurface.layer?.shadowOpacity = 0.26
-    statusSurface.layer?.shadowRadius = scaled(14)
-    statusSurface.layer?.shadowOffset = CGSize(width: 0, height: scaled(-3))
+    statusSurface.applyLegacyChrome(
+      borderAlpha: 0.30,
+      shadowOpacity: 0.26,
+      shadowRadius: scaled(14),
+      shadowOffsetY: scaled(-3)
+    )
     statusSurface.isHidden = true
     statusSurface.translatesAutoresizingMaskIntoConstraints = false
 
@@ -1779,17 +1906,19 @@ final class LauncherController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
 
     surface.visualScale = uiScale
     surface.surfaceCornerRadius = scaled(RiverLayout.cornerRadius)
-    surface.layer?.cornerRadius = scaled(RiverLayout.cornerRadius)
-    surface.layer?.borderWidth = max(1, scaled(1))
-    surface.layer?.shadowRadius = scaled(24)
-    surface.layer?.shadowOffset = CGSize(width: 0, height: scaled(-6))
+    surface.updateLegacyChromeScale(
+      borderWidth: max(1, scaled(1)),
+      shadowRadius: scaled(24),
+      shadowOffsetY: scaled(-6)
+    )
 
     statusSurface.visualScale = uiScale
     statusSurface.surfaceCornerRadius = scaled(RiverLayout.statusCornerRadius)
-    statusSurface.layer?.cornerRadius = scaled(RiverLayout.statusCornerRadius)
-    statusSurface.layer?.borderWidth = max(1, scaled(1))
-    statusSurface.layer?.shadowRadius = scaled(14)
-    statusSurface.layer?.shadowOffset = CGSize(width: 0, height: scaled(-3))
+    statusSurface.updateLegacyChromeScale(
+      borderWidth: max(1, scaled(1)),
+      shadowRadius: scaled(14),
+      shadowOffsetY: scaled(-3)
+    )
 
     rebuildStatusPluginViews()
     let selectedRows = table.selectedRowIndexes

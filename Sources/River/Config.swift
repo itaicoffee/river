@@ -11,7 +11,7 @@ struct AppConfig: Equatable {
   static let defaultTextSize = 24
   static let allowedTextSizes = 12...48
 
-  var hotkey = "cmd+shift+space"
+  var hotkey = "cmd+space"
   var textSize = AppConfig.defaultTextSize
   var searchURL = "https://www.google.com/search?q={query}"
   var luckyURL = "https://www.google.com/search?btnI=1&q={query}"
@@ -22,7 +22,7 @@ struct AppConfig: Equatable {
 
   static let defaultText = """
     # River reloads this file automatically. No restart is needed.
-    hotkey = cmd+shift+space
+    hotkey = cmd+space
     text_size = 24
     search_url = https://www.google.com/search?q={query}
     lucky_url = https://www.google.com/search?btnI=1&q={query}

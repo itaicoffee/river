@@ -101,6 +101,8 @@ final class RiverTests: XCTestCase {
   func testHotKeyParsing() {
     XCTAssertEqual(HotKeySpec("ctrl+f"), HotKeySpec("control+f"))
     XCTAssertNotNil(HotKeySpec("cmd+shift+space"))
+    XCTAssertEqual(AppConfig().hotkey, "cmd+space")
+    XCTAssertNotNil(HotKeySpec(AppConfig().hotkey))
     XCTAssertNil(HotKeySpec("f"))
     XCTAssertNil(HotKeySpec("hyper+f"))
   }

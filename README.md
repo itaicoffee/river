@@ -88,7 +88,7 @@ There are no third-party Swift dependencies. The release binary links only to ma
 River creates `~/.config/river/config` on first install and applies changes without a restart:
 
 ```ini
-hotkey = cmd+shift+space
+hotkey = cmd+space
 text_size = 24
 search_url = https://www.google.com/search?q={query}
 lucky_url = https://www.google.com/search?btnI=1&q={query}
@@ -102,6 +102,16 @@ max_file_results = 5
 Supported hotkey keys are letters, digits, and `space`; modifiers are `ctrl`, `cmd`, `opt`, and
 `shift`. `text_size` accepts 12 through 48 and proportionally scales all text and geometry in both
 River panels. Web links open in the default browser configured in macOS.
+
+The default `cmd+space` hotkey conflicts with Spotlight. Move Spotlight to `shift+cmd+space` with:
+
+```sh
+defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys -dict-add 64 \
+  '{enabled = 1; value = { parameters = (32, 49, 1179648); type = standard; }; }'
+/System/Library/PrivateFrameworks/SystemAdministration.framework/Resources/activateSettings -u
+```
+
+A logout may be required before macOS releases `cmd+space`.
 
 ### Quicklinks
 

@@ -50,7 +50,7 @@ enum Installer {
     print("  binary: \(Paths.installedBinary)")
     print("  app: \(Paths.installedApp)")
     print("  config: \(Paths.configFile)")
-    print("  hotkey: Cmd+Shift+Space")
+    print("  hotkey: Cmd+Space")
   }
 
   static func uninstall() throws {
